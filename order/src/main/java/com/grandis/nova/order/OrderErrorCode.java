@@ -30,6 +30,20 @@ public enum OrderErrorCode implements ErrorCode {
     DEAD_LETTER_NOT_DISCARDABLE(409, "버릴 수 없는 메시지입니다."),
     /** 관리자 결제 DLQ: 없거나 보관 시간(하루)이 지난 일괄 되돌리기. payment 의 같은 코드를 그대로 넘긴다. */
     REDRIVE_BATCH_NOT_FOUND(404, "일괄 되돌리기를 찾을 수 없습니다."),
+    /** 관리자 환불 조치: 주문에 결제 · 환불 거래가 없다. REFUND_* 는 이름 · 상태 · 문구 · details 가 payment 의 같은 코드와 같다(그대로 넘긴다). */
+    REFUND_NOT_FOUND(404, "환불을 찾을 수 없습니다."),
+    /** 관리자 환불 조치: 결제가 이미 환불로 끝났다. */
+    REFUND_ALREADY_COMPLETED(409, "이미 환불된 결제입니다."),
+    /** 관리자 환불 조치: 마지막 환불이 아직 진행 중이다. details.reason 에 판정. */
+    REFUND_IN_PROGRESS(409, "환불이 아직 진행 중입니다."),
+    /** 관리자 환불 조치: 마지막 환불이 본 것과 다르다. details.currentTransactionId 에 지금 것. */
+    REFUND_STATE_CHANGED(409, "환불 상태가 바뀌었습니다. 목록을 다시 확인해 주세요."),
+    /** 관리자 환불 조치: 다시 보내도 같거나 이중 환불이 될 수 있다. details.reason · providerStatus 등. */
+    REFUND_NOT_RETRYABLE(409, "다시 시도할 수 없는 환불입니다."),
+    /** 관리자 환불 조치: 결제사 조회가 전액 취소가 아니다. details 에 결제사 상태 · 처음 금액 · 잔액 · 취소 건수. */
+    REFUND_NOT_CANCELED_AT_PROVIDER(409, "결제사에서 전액 취소가 확인되지 않습니다."),
+    /** 관리자 환불 조치: 결제사 조회 결과를 몰랐다 — 아무것도 바꾸지 않았다. */
+    REFUND_PROVIDER_UNAVAILABLE(503, "결제사 조회에 실패했습니다. 잠시 후 다시 시도해 주세요."),
     /** 예약당 주문은 평생 하나라(uq_order_preorder) 취소된 주문이 있으면 다시 주문할 수 없다. */
     ORDER_ALREADY_CANCELED(409, "이미 취소된 주문이 있어 다시 주문할 수 없습니다."),
     /** 지금 상태에서 그 배송 단계로 옮길 수 없다(앞 단계 건너뛰기 · 미결제 · 취소 중 등). details.status 에 지금 상태. */

@@ -213,6 +213,47 @@ public class OrderLedger {
     }
 
     /**
+     * 관리자가 멈춘 환불을 다시 보냈다고 적는다 — 환불 실패 시각을 지우고 이력(REFUND_RETRIED)을 한 줄 남긴다. 상태는 그대로다. 지워야 다시
+     * 실패했을 때 그 실패를 또 적는다({@link #noteRefundFailed} 는 실패 시각이 없을 때만 적는다). 취소 중 주문 · 자동 환불이 끝나지 않은 취소된
+     * 주문에만.
+     *
+     * 이 기록이 늦어 그사이 다시 보낸 환불의 새 실패가 먼저 적혔으면(실패 시각이 requestedAt 뒤) 아무것도 하지 않는다 — 지우면 그 실패가
+     * 사라지고, 이력만 남겨도 마지막 이력이 실패가 아니게 돼 화면의 실패 표시가 풀린다(OrderView). 다시 보낸 기록은 payment 의 조치 기록에 있다.
+     * 막지 못하는 경우가 남는다 — 옛 실패 시각이 있는 채 새 실패가 먼저 닿으면 그 실패는 적히지 않고 이 기록이 옛 시각을 지운다. 환불 결과에
+     * 거래 id 가 없어 가를 수 없다({@link com.grandis.nova.order.order.cancel.RefundIssues} 의 한계). 그때는 payment 목록이 맞다.
+     *
+     * @param requestedAt 관리자 조치를 payment 에 요청하기 전의 시각
+     * @return 적었으면 true
+     * @throws IllegalArgumentException 주문이 없다
+     */
+    public boolean noteRefundRetried(UUID orderId, Instant requestedAt, EventCause cause) {
+        OrderStatus from = lock(orderId);
+        Instant now = clock.instant();
+        if (writer.markRefundRetried(orderId, requestedAt, now) == 0) {
+            return false;
+        }
+        writer.appendEvent(new OrderEvent(orderId, writer.eventSequence(orderId), from, from, cause, now));
+        return true;
+    }
+
+    /**
+     * 자동 환불이 끝났다고 적는다 — 완료 시각과 이력(REFUND_COMPLETED, 취소 → 취소)을 한 줄 남긴다. 주문은 이미 취소라 상태는 그대로다.
+     * 자동 환불을 요청한 취소된 주문이고 아직 적지 않았을 때만 — 같은 결과를 다시 받아도 한 번이다.
+     *
+     * @return 적었으면 true
+     * @throws IllegalArgumentException 주문이 없다
+     */
+    public boolean noteAutoRefundCompleted(UUID orderId, EventCause cause) {
+        OrderStatus from = lock(orderId);
+        Instant now = clock.instant();
+        if (writer.markAutoRefundCompleted(orderId, now) == 0) {
+            return false;
+        }
+        writer.appendEvent(new OrderEvent(orderId, writer.eventSequence(orderId), from, from, cause, now));
+        return true;
+    }
+
+    /**
      * 결제 대기인 일반 주문을 취소하고 재고 반환 표식을 적는다(취소와 같은 UPDATE). 재고 행의 반환은 호출하는 쪽이 같은 트랜잭션에서
      * 한다 — 이 메서드가 true 를 돌려준 때만, 그래서 한 번만.
      *

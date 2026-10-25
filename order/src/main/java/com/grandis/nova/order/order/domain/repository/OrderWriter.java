@@ -78,6 +78,24 @@ public interface OrderWriter {
     int markRefundFailed(UUID orderId, Instant now);
 
     /**
+     * 관리자가 환불을 다시 보냈다 — 환불 실패 시각을 지워, 다시 실패하면 그 실패를 또 적게 한다. 이력 번호를 1 올린다. 취소 중 주문 · 자동 환불을
+     * 요청했고 아직 끝나지 않은 취소된 주문에만. 조치를 요청한 시각 뒤에 적힌 실패(다시 보낸 환불의 새 실패)는 지우지 않는다 — 0행이다.
+     * {@link #lockStatus} 로 행을 잠근 뒤에 부른다.
+     *
+     * @param requestedAt 관리자 조치를 payment 에 요청하기 전의 시각
+     * @return 바뀐 행 수(0 또는 1)
+     */
+    int markRefundRetried(UUID orderId, Instant requestedAt, Instant now);
+
+    /**
+     * 자동 환불이 끝난 시각을 적는다(ck_order_auto_refund_completed). 이력 번호를 1 올린다. 자동 환불을 요청한 취소된 주문이고 아직 안 적었을
+     * 때만 — 같은 결과를 다시 받아도 한 번이다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다.
+     *
+     * @return 바뀐 행 수(0 또는 1)
+     */
+    int markAutoRefundCompleted(UUID orderId, Instant now);
+
+    /**
      * 결제 확인 대기인 주문에 결제 시각을 적는다(ck_order_paid). 이력 번호는 올리지 않는다 — 같은 트랜잭션의 승인 전이가 이미 올렸다.
      * 이미 적혀 있으면 바꾸지 않는다. {@link #lockStatus} 로 행을 잠근 뒤에 부른다.
      *

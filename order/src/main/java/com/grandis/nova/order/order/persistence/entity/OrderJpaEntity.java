@@ -70,6 +70,10 @@ public class OrderJpaEntity extends BaseEntity {
     @Column(updatable = false)
     private Instant autoRefundRequestedAt;
 
+    /** 그 자동 환불이 끝난 시각(ck_order_auto_refund_completed). 원장의 벌크 UPDATE 로만 적는다. 도메인 주문에는 싣지 않는다. */
+    @Column(updatable = false)
+    private Instant autoRefundCompletedAt;
+
     @Column(updatable = false)
     private Instant paidAt;
 

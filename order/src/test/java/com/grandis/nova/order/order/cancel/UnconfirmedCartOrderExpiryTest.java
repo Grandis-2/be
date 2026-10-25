@@ -49,7 +49,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
@@ -331,10 +333,40 @@ class UnconfirmedCartOrderExpiryTest {
 
         assertThat(column(refunded, "status", String.class)).isEqualTo("CANCELED");
         assertThat(column(refunded, "refund_failed_at IS NULL", Boolean.class)).isTrue();
+        assertThat(column(refunded, "auto_refund_completed_at IS NOT NULL", Boolean.class)).isTrue();
+        assertThat(lastEvent(refunded)).containsEntry("reason", "REFUND_COMPLETED");
         assertThat(column(failed, "status", String.class)).isEqualTo("CANCELED");
         assertThat(column(failed, "refund_failed_at IS NOT NULL", Boolean.class)).isTrue();
         assertThat(lastEvent(failed)).containsEntry("reason", "REFUND_FAILED");
         assertThat(attention("AUTO_REFUND_FAILED")).isEqualTo(autoRefundFailed + 1);
+    }
+
+    @Test
+    @DisplayName("자동 환불 완료는 한 번만 적는다 · 확정 실패 뒤 다시 보내 끝나면 실패 표시가 풀린다")
+    void autoRefundCompletionAndRetry() throws Exception {
+        UUID phone = sellable(10);
+        String order = autoRefunded(phone, "p-retry");
+        refundResults.settle(new RefundSettlement(UUID.fromString(order), RefundSettlement.Result.FAILED, PRICE));
+        mockMvc.perform(get("/api/v1/orders/{orderId}", order).with(TestAuth.customer(customerOf(order))))
+                .andExpect(jsonPath("$.data.refundFailed").value(true));
+
+        new TransactionTemplate(transactionManager).executeWithoutResult(status ->
+                ledger.noteRefundRetried(UUID.fromString(order), Instant.now(), EventCause.admin("REFUND_RETRIED")));
+        assertThat(column(order, "refund_failed_at IS NULL", Boolean.class)).isTrue();
+        refundResults.settle(new RefundSettlement(UUID.fromString(order), RefundSettlement.Result.FAILED, PRICE));
+        assertThat(column(order, "refund_failed_at IS NOT NULL", Boolean.class)).as("다시 실패하면 또 적는다").isTrue();
+
+        new TransactionTemplate(transactionManager).executeWithoutResult(status ->
+                ledger.noteRefundRetried(UUID.fromString(order), Instant.now(), EventCause.admin("REFUND_RETRIED")));
+        refundResults.settle(new RefundSettlement(UUID.fromString(order), RefundSettlement.Result.REFUNDED, PRICE));
+        refundResults.settle(new RefundSettlement(UUID.fromString(order), RefundSettlement.Result.REFUNDED, PRICE));
+
+        assertThat(lastEvent(order)).containsEntry("reason", "REFUND_COMPLETED");
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM order_events WHERE order_id = ? "
+                + "AND reason = 'REFUND_COMPLETED'", Integer.class, (Object) bytes(UUID.fromString(order))))
+                .as("완료는 한 번").isEqualTo(1);
+        mockMvc.perform(get("/api/v1/orders/{orderId}", order).with(TestAuth.customer(customerOf(order))))
+                .andExpect(jsonPath("$.data.refundFailed").value(false));
     }
 
     @Test

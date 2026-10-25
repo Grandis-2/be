@@ -135,6 +135,45 @@ public interface OrderJpaRepository extends JpaRepository<OrderJpaEntity, UUID>,
     @Modifying(flushAutomatically = true)
     @Query("""
             update OrderJpaEntity o
+               set o.refundFailedAt = null, o.eventSequence = o.eventSequence + 1, o.updatedAt = :now
+             where o.id = :id and (o.refundFailedAt is null or o.refundFailedAt <= :requestedAt)
+               and (o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELING
+                    or (o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELED
+                        and o.autoRefundRequestedAt is not null and o.autoRefundCompletedAt is null))
+            """)
+    int markRefundRetried(@Param("id") UUID id, @Param("requestedAt") Instant requestedAt, @Param("now") Instant now);
+
+    @Modifying(flushAutomatically = true)
+    @Query("""
+            update OrderJpaEntity o
+               set o.autoRefundCompletedAt = :now, o.eventSequence = o.eventSequence + 1, o.updatedAt = :now
+             where o.id = :id and o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELED
+               and o.autoRefundRequestedAt is not null and o.autoRefundCompletedAt is null
+            """)
+    int markAutoRefundCompleted(@Param("id") UUID id, @Param("now") Instant now);
+
+    /*
+     * 환불이 멈췄을 수 있는 주문(관리자 목록). 취소 중인데 환불이 확정 실패했거나 오래 바뀌지 않았거나, 자동 환불을 요청한 지 오래인데 끝나지
+     * 않았다. ix_order_status_created 의 앞부분(status)으로 두 상태만 읽고 나머지는 행에서 거른다 — 두 상태의 주문은 적다.
+     */
+    @Query("""
+            select o from OrderJpaEntity o
+             where (o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELING
+                    and (o.refundFailedAt is not null or o.updatedAt < :staleBefore))
+                or (o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.CANCELED
+                    and o.autoRefundRequestedAt is not null and o.autoRefundCompletedAt is null
+                    and (o.refundFailedAt is not null or o.autoRefundRequestedAt < :staleBefore))
+             order by o.updatedAt, o.id
+            """)
+    List<OrderJpaEntity> findRefundStuck(@Param("staleBefore") Instant staleBefore, Limit limit);
+
+    /** 스칼라 조회라 영속성 컨텍스트의 엔티티가 아니라 DB 값을 읽는다. */
+    @Query("select o.autoRefundCompletedAt from OrderJpaEntity o where o.id = :id")
+    Optional<Instant> findAutoRefundCompletedAt(@Param("id") UUID id);
+
+    @Modifying(flushAutomatically = true)
+    @Query("""
+            update OrderJpaEntity o
                set o.paidAt = :paidAt
              where o.id = :id and o.status = com.grandis.nova.order.order.domain.enums.OrderStatus.AWAITING_CONFIRMATION
                and o.paidAt is null
