@@ -5,6 +5,7 @@ import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.order.client.payment.PaymentDeadLetter;
 import com.grandis.nova.order.client.payment.PaymentDeadLetterBatch;
+import com.grandis.nova.order.client.payment.PaymentDeadLetterBatchProgress;
 import com.grandis.nova.order.client.payment.PaymentDeadLetterBatchRequest;
 import com.grandis.nova.order.client.payment.PaymentDeadLetterDiscardRequest;
 import com.grandis.nova.order.client.payment.PaymentDeadLetterFailureReason;
@@ -81,11 +82,25 @@ public class AdminPaymentDeadLetterController {
     }
 
     @PostMapping("/redrive-batch")
-    @Operation(summary = "조건으로 일괄 되돌리기", description = "한 번에 최대 1000건, 초당 1~200건(기본 20). 시작만 알린다")
+    @Operation(summary = "조건으로 일괄 되돌리기", description = "한 번에 최대 1000건, 초당 1~200건(기본 20). 이어서 보내고, "
+            + "진행은 응답의 batchId 로 redrive-batches/{batchId} 에서 본다")
     public ResponseEntity<ApiResponse<PaymentDeadLetterBatch>> redriveBatch(
             @Valid @RequestBody PaymentDeadLetterBatchRequest request, HttpServletRequest httpRequest) {
         return ResponseEntity.status(HttpStatus.ACCEPTED)
                 .body(ApiResponse.ok(deadLetters.redriveBatch(request, token(httpRequest))));
+    }
+
+    @GetMapping("/redrive-batches/{batchId}")
+    @Operation(summary = "일괄 되돌리기 진행 — 보낸 수와 보낸 행의 지금 상태(처리됨 · 또 DLQ · 기다림)",
+            description = "칸은 사전예약 일괄 재처리 진행과 같다. 결과 수는 조회할 때 큐로 보낸 원래 행의 지금 상태로 센다 — succeeded 는 "
+                    + "처리됨(환불했다는 뜻은 아니다), failed 는 또 DLQ 로 옴이고, 다시 실패해 새로 쌓인 행은 세지 않는다. 보내기 결과를 "
+                    + "남기지 못한 행은 실제로 갔을 수 있어도 unsent 로 센다. 결제 DLQ 는 보낸 행을 버리는 길이 없어 canceled 는 늘 0 이다. "
+                    + "pending 은 아직 보내지 않았거나 결과를 기다리는 수다. finishedAt 이 비어 있는데 lastProgressAt 이 오래 그대로면 "
+                    + "보내던 서버가 멈춘 것이다(같은 요청을 다시 보내면 이어진다). 진행 기록을 놓치면 finishedAt 이 찍혀도 pending 이 남을 "
+                    + "수 있다. 없는 batchId, 하루가 지난 일괄, 시작 때 진행 기록을 남기지 못한 일괄은 404 다")
+    public ApiResponse<PaymentDeadLetterBatchProgress> redriveBatchProgress(@PathVariable UUID batchId,
+                                                                            HttpServletRequest httpRequest) {
+        return ApiResponse.ok(deadLetters.redriveBatchProgress(batchId, token(httpRequest)));
     }
 
     @PostMapping("/{deadLetterId}/discard")

@@ -15,6 +15,8 @@ public enum PaymentErrorCode implements ErrorCode {
     /** 없는 결제사 주문 번호 · 다른 대상의 번호. 남의 거래를 떠볼 수 없게 둘을 가르지 않는다. */
     PAYMENT_ATTEMPT_NOT_FOUND(404, "결제 시도를 찾을 수 없습니다."),
     DEAD_LETTER_NOT_FOUND(404, "DLQ 메시지를 찾을 수 없습니다."),
+    /** 없거나 보관 시간(하루)이 지난 일괄 되돌리기. preorder REPROCESS_BATCH_NOT_FOUND 와 같은 자리다. */
+    REDRIVE_BATCH_NOT_FOUND(404, "일괄 되돌리기를 찾을 수 없습니다."),
     /** 결제창을 열 때의 금액이 호출자의 저장 금액과 다르다(D15). */
     PAYMENT_AMOUNT_MISMATCH(409, "결제 금액이 주문 금액과 다릅니다."),
     /** 같은 대상의 동시 승인 시작과 교착했고 다시 해도 풀리지 않았다(D14). 이번 요청은 시작하지 않았다 — 잠시 뒤 다시 부른다. */

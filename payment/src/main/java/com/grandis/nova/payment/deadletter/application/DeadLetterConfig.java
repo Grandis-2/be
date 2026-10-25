@@ -1,10 +1,12 @@
 package com.grandis.nova.payment.deadletter.application;
 
+import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.core.task.SimpleAsyncTaskExecutor;
 
 @Configuration(proxyBeanMethods = false)
+@EnableConfigurationProperties(RedriveBatchProperties.class)
 class DeadLetterConfig {
 
     static final String REDRIVE_EXECUTOR = "deadLetterRedriveExecutor";

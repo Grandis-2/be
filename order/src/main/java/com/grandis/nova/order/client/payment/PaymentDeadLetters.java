@@ -38,7 +38,8 @@ public class PaymentDeadLetters {
     private static final Map<String, OrderErrorCode> PASSED_THROUGH = Map.of(
             "DEAD_LETTER_NOT_FOUND", OrderErrorCode.DEAD_LETTER_NOT_FOUND,
             "DEAD_LETTER_NOT_REDRIVABLE", OrderErrorCode.DEAD_LETTER_NOT_REDRIVABLE,
-            "DEAD_LETTER_NOT_DISCARDABLE", OrderErrorCode.DEAD_LETTER_NOT_DISCARDABLE);
+            "DEAD_LETTER_NOT_DISCARDABLE", OrderErrorCode.DEAD_LETTER_NOT_DISCARDABLE,
+            "REDRIVE_BATCH_NOT_FOUND", OrderErrorCode.REDRIVE_BATCH_NOT_FOUND);
 
     private final PaymentDeadLetterClient client;
 
@@ -65,6 +66,12 @@ public class PaymentDeadLetters {
 
     public PaymentDeadLetterBatch redriveBatch(PaymentDeadLetterBatchRequest request, String sessionToken) {
         return call("dead-letters.redrive-batch", () -> client.redriveBatch(request, authorization(sessionToken)));
+    }
+
+    /** 없거나 하루가 지난 batchId 는 payment 의 REDRIVE_BATCH_NOT_FOUND(404) 를 그대로 넘긴다. */
+    public PaymentDeadLetterBatchProgress redriveBatchProgress(UUID batchId, String sessionToken) {
+        return call("dead-letters.redrive-batch-progress",
+                () -> client.redriveBatchProgress(batchId, authorization(sessionToken)));
     }
 
     /**

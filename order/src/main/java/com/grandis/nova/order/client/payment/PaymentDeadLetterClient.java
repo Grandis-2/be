@@ -19,8 +19,8 @@ import java.util.UUID;
  * 그룹은 payment-admin 이다 — 주소는 payment 와 같고, 읽기 기한(5s)이 payment 의 SQS 보내기 한 번(api-call-timeout 3s)보다 길어야
  * 되돌리기가 보내졌는데 503 으로 보이는 일이 줄어든다. 준비 · 승인 그룹의 기한은 따로 둔다.
  *
- * 계약: payment InternalDeadLetterController. 관리자 액세스 토큰을 그대로 전달하고, payment 는 역할(ADMIN)을 다시 보고 되돌리기 ·
- * 버리기를 한 사람을 그 토큰의 주체로 남긴다.
+ * 계약: payment InternalDeadLetterController(일괄 되돌리기 진행의 칸 뜻은 payment BatchRedriveProgress). 관리자 액세스 토큰을 그대로
+ * 전달하고, payment 는 역할(ADMIN)을 다시 보고 되돌리기 · 버리기를 한 사람을 그 토큰의 주체로 남긴다.
  *
  * @see PaymentDeadLetters 실패 분류
  */
@@ -53,6 +53,11 @@ public interface PaymentDeadLetterClient {
     ApiResponse<PaymentDeadLetterBatch> redriveBatch(@RequestBody PaymentDeadLetterBatchRequest request,
                                                      @RequestHeader(name = BearerTokens.HEADER, required = false)
                                                      String authorization);
+
+    @GetExchange("/redrive-batches/{batchId}")
+    ApiResponse<PaymentDeadLetterBatchProgress> redriveBatchProgress(@PathVariable UUID batchId,
+                                                                     @RequestHeader(name = BearerTokens.HEADER,
+                                                                             required = false) String authorization);
 
     @PostExchange("/{deadLetterId}/discard")
     ApiResponse<PaymentDeadLetter> discard(@PathVariable UUID deadLetterId,

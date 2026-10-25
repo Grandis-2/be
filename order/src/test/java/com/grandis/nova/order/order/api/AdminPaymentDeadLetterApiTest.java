@@ -5,6 +5,7 @@ import com.grandis.nova.common.security.BearerTokens;
 import com.grandis.nova.common.web.ApiResponse;
 import com.grandis.nova.order.client.payment.PaymentDeadLetter;
 import com.grandis.nova.order.client.payment.PaymentDeadLetterBatch;
+import com.grandis.nova.order.client.payment.PaymentDeadLetterBatchProgress;
 import com.grandis.nova.order.client.payment.PaymentDeadLetterBatchRequest;
 import com.grandis.nova.order.client.payment.PaymentDeadLetterClient;
 import com.grandis.nova.order.client.payment.PaymentDeadLetterDiscardRequest;
@@ -57,6 +58,7 @@ class AdminPaymentDeadLetterApiTest {
     static final String AUTHORIZATION = BearerTokens.value(SESSION);
     static final UUID ID = UUID.fromString("00000000-0000-7000-8000-0000000000d2");
     static final UUID ORDER_ID = UUID.fromString("00000000-0000-7000-8000-0000000000a2");
+    static final UUID BATCH_ID = UUID.fromString("00000000-0000-7000-8000-0000000000b2");
 
     @Autowired
     MockMvc mockMvc;
@@ -93,7 +95,11 @@ class AdminPaymentDeadLetterApiTest {
         given(client.get(ID, AUTHORIZATION)).willReturn(ApiResponse.ok(detail()));
         given(client.redrive(ID, AUTHORIZATION)).willReturn(ApiResponse.ok(summary()));
         given(client.redriveBatch(new PaymentDeadLetterBatchRequest(List.of(ID), null, null, 50), AUTHORIZATION))
-                .willReturn(ApiResponse.ok(new PaymentDeadLetterBatch(1, 0, 1)));
+                .willReturn(ApiResponse.ok(new PaymentDeadLetterBatch(BATCH_ID, 1, 0, 1)));
+        given(client.redriveBatchProgress(BATCH_ID, AUTHORIZATION)).willReturn(ApiResponse.ok(
+                new PaymentDeadLetterBatchProgress(BATCH_ID, 1, 0, 1, 0, 1, 0, 0, 0,
+                        Instant.parse("2026-10-04T01:00:00Z"), Instant.parse("2026-10-04T01:00:01Z"),
+                        Instant.parse("2026-10-04T01:00:01Z"))));
         given(client.discard(ID, new PaymentDeadLetterDiscardRequest("재발행 요청"), AUTHORIZATION))
                 .willReturn(ApiResponse.ok(detail()));
 
@@ -107,7 +113,15 @@ class AdminPaymentDeadLetterApiTest {
         asAdmin(post(BASE + "/redrive-batch").contentType(MediaType.APPLICATION_JSON)
                 .content("{\"deadLetterIds\":[\"%s\"],\"ratePerSecond\":50}".formatted(ID)))
                 .andExpect(status().isAccepted())
+                .andExpect(jsonPath("$.data.batchId").value(BATCH_ID.toString()))
                 .andExpect(jsonPath("$.data.targetCount").value(1));
+        asAdmin(get(BASE + "/redrive-batches/{batchId}", BATCH_ID))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.data.batchId").value(BATCH_ID.toString()))
+                .andExpect(jsonPath("$.data.sent").value(1))
+                .andExpect(jsonPath("$.data.succeeded").value(1))
+                .andExpect(jsonPath("$.data.canceled").value(0))
+                .andExpect(jsonPath("$.data.finishedAt").value("2026-10-04T01:00:01Z"));
         asAdmin(post(BASE + "/{id}/discard", ID).contentType(MediaType.APPLICATION_JSON).content("{\"note\":\"재발행 요청\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.deadLetterId").value(ID.toString()));
@@ -118,6 +132,8 @@ class AdminPaymentDeadLetterApiTest {
         mockMvc.perform(get(BASE)).andExpect(status().isUnauthorized());
         mockMvc.perform(get(BASE).with(TestAuth.customer(UUID.randomUUID()))).andExpect(status().isForbidden());
         mockMvc.perform(post(BASE + "/{id}/redrive", ID).with(TestAuth.customer(UUID.randomUUID())))
+                .andExpect(status().isForbidden());
+        mockMvc.perform(get(BASE + "/redrive-batches/{batchId}", BATCH_ID).with(TestAuth.customer(UUID.randomUUID())))
                 .andExpect(status().isForbidden());
 
         verifyNoInteractions(client);
@@ -130,6 +146,8 @@ class AdminPaymentDeadLetterApiTest {
                 .willThrow(rejection(HttpStatus.CONFLICT, "DEAD_LETTER_NOT_REDRIVABLE", "{\"reason\":\"status=REDRIVEN\"}"));
         given(client.discard(ID, new PaymentDeadLetterDiscardRequest("x"), AUTHORIZATION))
                 .willThrow(rejection(HttpStatus.CONFLICT, "DEAD_LETTER_NOT_DISCARDABLE", "{\"reason\":\"status=DISCARDED\"}"));
+        given(client.redriveBatchProgress(BATCH_ID, AUTHORIZATION))
+                .willThrow(rejection(HttpStatus.NOT_FOUND, "REDRIVE_BATCH_NOT_FOUND", "null"));
 
         asAdmin(get(BASE + "/{id}", ID))
                 .andExpect(status().isNotFound())
@@ -141,6 +159,9 @@ class AdminPaymentDeadLetterApiTest {
         asAdmin(post(BASE + "/{id}/discard", ID).contentType(MediaType.APPLICATION_JSON).content("{\"note\":\"x\"}"))
                 .andExpect(status().isConflict())
                 .andExpect(jsonPath("$.error.code").value("DEAD_LETTER_NOT_DISCARDABLE"));
+        asAdmin(get(BASE + "/redrive-batches/{batchId}", BATCH_ID))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error.code").value("REDRIVE_BATCH_NOT_FOUND"));
     }
 
     @Test

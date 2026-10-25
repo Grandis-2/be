@@ -12,8 +12,10 @@ import java.lang.annotation.Target;
 /**
  * MySQL 8.4 + Flyway 마이그레이션 위에서 도는 통합 테스트. application.yml 은 커밋하지 않으므로 운영과 같아야 하는 값을 여기서 준다.
  *
- * 인증: JWT 서명 키는 {@link TestJwt} 가 실행마다 만든다. Redis 는 띄우지 않는다 — 토큰을 싣는 테스트는 RevocationChecker 를
- * 대역으로 바꾼다. 닫는 경로 목록은 application.yml.example 과 같다. DLQ 되돌리기는 큐로 보내지 않고 기록하는 대역이다
+ * 인증: JWT 서명 키는 {@link TestJwt} 가 실행마다 만든다. 이 애너테이션은 Redis 를 띄우지 않는다 — 토큰을 싣는 테스트는
+ * RevocationChecker 를 대역으로 바꾸고, 진행을 단정하는 테스트만 {@link RedisContainerConfig} 를 Import 한다. 그 밖에 일괄 되돌리기를
+ * 부르는 테스트도 진행 기록을 위해 기본 주소(localhost:6379)로 접속한다 — 로컬에서 Redis 가 없으면 경고만 남기고 이어가고, CI 에서는
+ * 서비스 컨테이너 Redis 에 키(payment:redrive-batch:{UUID}, 보관 24시간)가 남는다. 닫는 경로 목록은 application.yml.example 과 같다. DLQ 되돌리기는 큐로 보내지 않고 기록하는 대역이다
  * ({@link DeadLetterTestConfig}).
  */
 @Target(ElementType.TYPE)
