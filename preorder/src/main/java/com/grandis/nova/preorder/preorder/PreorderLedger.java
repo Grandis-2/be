@@ -61,11 +61,9 @@ public class PreorderLedger {
     }
 
     /**
-     * {@link #accept} 로 넣은 예약에 회차가 발급한 순번 · 차수를 채운다(아직 비어 있는 행만). 저장소 쿼리로 쓴다 — 차수 외래 키 ·
-     * 순번 UNIQUE 위반이 DataIntegrityViolationException 으로 바뀌고 제약 이름이 남아 접수 유스케이스가 판정한다.
-     * 넣은 객체는 영속성 컨텍스트에 있어 다시 읽지 않는다.
+     * {@link #accept} 로 넣은 예약에 순번 · 차수를 채운다. 저장소 쿼리라 외래 키 · UNIQUE 위반에 제약 이름이 남는다.
      *
-     * @throws IllegalStateException 채울 예약이 없다(같은 트랜잭션에서 넣지 않았거나 이미 채웠다)
+     * @throws IllegalStateException 채울 예약이 없다
      */
     public PreorderSnapshot place(UUID preorderId, UUID shipmentBatchId, long queuePosition) {
         int placed = preorders.place(UuidBinary.toBytes(preorderId), UuidBinary.toBytes(shipmentBatchId),

@@ -71,8 +71,7 @@ public class Campaigns {
     }
 
     /**
-     * 순번 발급이 거절한 까닭을 고를 때 쓴다. 이 트랜잭션이 앞서 읽은 회차 엔티티는 다시 조회해도 Hibernate 가 새 행 값을 버려
-     * 그사이 커밋된 마감 · 판매 중지가 안 보인다 — refresh 로 지금 값을 덮어 읽는다.
+     * 순번 발급이 거절된 사유를 고를 때 쓴다. 앞서 읽은 엔티티는 다시 조회해도 Hibernate 가 새 값을 버려 refresh 로 읽는다.
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public Optional<CampaignForAccept> findCurrentForAccept(UUID productId) {
@@ -87,13 +86,10 @@ public class Campaigns {
     }
 
     /**
-     * 접수 중인 회차에서 순번 하나를 발급하고 그 순번의 차수를 정한다. 회차 행을 잠그는 문장이라 접수 트랜잭션의 다른 쓰기를 모두 마친 뒤
-     * 부른다 — 잠금은 커밋까지다. 공개 · 판매 중 · 접수 기간(now)이 아니면 비어 있고 행을 바꾸지 않는다.
-     * 차수는 오픈 뒤에 읽어 둔 원천 캐시에서 고르고, 없으면 DB 에서 읽는다 — 잠금 구간의 왕복을 하나 줄인다.
-     * 교체와 겹쳐 옛 차수를 골라도 예약의 차수 외래 키가 순번 채우기를 막는다(교체는 차수 행을 지우고 새로 넣는다).
+     * 회차 행을 잠가 순번을 발급하고 그 순번의 차수를 고른다. 잠금은 커밋까지라 접수의 다른 쓰기를 마친 뒤 부른다.
+     * 판매 중 · 접수 기간이 아니면 비어 있다. 차수는 오픈 뒤 캐시에서 고르고, 교체와 겹치면 차수 외래 키가 막는다.
      *
-     * @param schedule 같은 접수가 잠그기 전에 읽은 일정({@link #findForAccept}). 오픈 시각으로 캐시의 차수를 쓸지 정한다
-     * @throws IllegalStateException 순번이 속한 차수가 없다(오픈 전 검사를 지나친 데이터)
+     * @throws IllegalStateException 순번이 속한 차수가 없다
      */
     @Transactional(propagation = Propagation.MANDATORY)
     public Optional<IssuedPosition> issuePosition(CampaignSchedule schedule, Instant now) {

@@ -16,9 +16,8 @@ import java.util.OptionalLong;
 import java.util.UUID;
 
 /**
- * 회차의 순번 카운터(preorder_campaigns.next_queue_position). 조건부 UPDATE 한 문장이 회차 행을 잠그고 올린다 — 잠금은
- * 트랜잭션 끝까지라 같은 회차의 접수는 여기서 한 줄로 선다. 발급한 순번(올리기 전 값)은 LAST_INSERT_ID 로 남겨 같은 문장의 생성 키로
- * 받는다 — 다시 읽지 않는다. 롤백하면 카운터도 되돌아가 빈틈이 생기지 않는다.
+ * 회차 순번 카운터. 조건부 UPDATE 한 문장이 회차 행을 잠그고 올리며, 발급한 값은 LAST_INSERT_ID 생성 키로 받는다.
+ * 롤백하면 카운터도 되돌아가 빈틈이 없다.
  */
 @Component
 public class QueuePositionCounter {
