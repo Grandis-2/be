@@ -42,7 +42,7 @@ public enum OrderErrorCode implements ErrorCode {
     REFUND_NOT_RETRYABLE(409, "다시 시도할 수 없는 환불입니다."),
     /** 관리자 환불 조치: 결제사 조회가 전액 취소가 아니다. details 에 결제사 상태 · 처음 금액 · 잔액 · 취소 건수. */
     REFUND_NOT_CANCELED_AT_PROVIDER(409, "결제사에서 전액 취소가 확인되지 않습니다."),
-    /** 관리자 환불 조치: 결제사 조회 결과를 몰랐다 — 아무것도 바꾸지 않았다. */
+    /** 관리자 환불 조치: 결제사 조회 결과를 몰랐거나 payment 의 동시 조치 상한이다(details.reason) — 아무것도 바꾸지 않았다. */
     REFUND_PROVIDER_UNAVAILABLE(503, "결제사 조회에 실패했습니다. 잠시 후 다시 시도해 주세요."),
     /** 예약당 주문은 평생 하나라(uq_order_preorder) 취소된 주문이 있으면 다시 주문할 수 없다. */
     ORDER_ALREADY_CANCELED(409, "이미 취소된 주문이 있어 다시 주문할 수 없습니다."),

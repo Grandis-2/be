@@ -99,8 +99,8 @@ class AdminRefundIssueApiTest {
         assertThat(mine.get("actions")).isEqualTo(List.of("RETRY", "MANUAL_COMPLETE"));
         assertThat(byId(items, refundedAtPayment.id())).containsEntry("reason", "REFUNDED_NOT_APPLIED");
         assertThat(byId(items, paymentOnly)).containsEntry("reason", "ESCALATED_MISMATCH").containsEntry("orderStatus", null);
-        assertThat(items.indexOf(byId(items, paymentOnly))).as("결제 쪽에서만 고른 것은 뒤에")
-                .isGreaterThan(items.indexOf(mine));
+        assertThat(items.indexOf(byId(items, paymentOnly))).as("오래 멈춘 것부터 — 결제 쪽 환불 거래가 주문 갱신보다 먼저다")
+                .isLessThan(items.indexOf(mine));
     }
 
     @Test
@@ -142,32 +142,6 @@ class AdminRefundIssueApiTest {
         assertThat(lastEvent(order)).containsEntry("reason", "REFUND_FAILED");
         mockMvc.perform(get("/api/v1/orders/{orderId}", order.id()).with(TestAuth.customer(customerId)))
                 .andExpect(jsonPath("$.data.refundFailed").value(true));
-    }
-
-    @Test
-    void 주문_쪽_후보가_많아도_payment_에는_나눠_묻는다() throws Exception {
-        List<Order> stuck = new java.util.ArrayList<>();
-        for (int i = 0; i < 205; i++) {
-            Order order = canceling();
-            refundResults.settle(failed(order));
-            stuck.add(order);
-        }
-        given(payments.issues(eq(List.of()), anyInt(), any())).willReturn(List.of());
-        List<Integer> asked = new java.util.concurrent.CopyOnWriteArrayList<>();
-        given(payments.issues(argThat(ids -> !ids.isEmpty()), anyInt(), any())).willAnswer(invocation -> {
-            List<UUID> ids = invocation.getArgument(0);
-            asked.add(ids.size());
-            return ids.stream().map(id -> issue(id, "REFUND_REJECTED")).toList();
-        });
-
-        String body = mockMvc.perform(get("/api/v1/admin/orders/refund-issues").with(TestAuth.admin()))
-                .andExpect(status().isOk()).andReturn().getResponse().getContentAsString();
-
-        List<Map<String, Object>> items = com.jayway.jsonpath.JsonPath.read(body, "$.data[*]");
-        for (Order order : stuck) {
-            assertThat(byId(items, order.id())).containsEntry("reason", "REFUND_REJECTED");
-        }
-        assertThat(asked).allMatch(size -> size <= 100).hasSizeGreaterThanOrEqualTo(3);
     }
 
     @Test

@@ -23,6 +23,7 @@ import com.grandis.nova.payment.vo.PaymentTarget;
 import com.grandis.nova.payment.vo.ProviderError;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -35,6 +36,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
+import java.util.concurrent.Semaphore;
 import java.util.function.Supplier;
 
 /**
@@ -52,6 +54,11 @@ import java.util.function.Supplier;
  * 결제사 조회는 트랜잭션 밖이고, 반영은 관리자가 본 마지막 거래가 그대로일 때만이다(대상의 결제 행 잠금 · 리스 조건). 조회와 반영 사이에
  * 결제사 상태가 바뀌어도 안전하다 — 취소는 되돌아가지 않고, 새 거래의 재전송은 결제사가 두 번 전액 취소하지 않는다(복구의 방어와 같다).
  * 받아들인 조치는 같은 트랜잭션에서 기록하고({@link RefundAdminActions}), 거절은 아무것도 바꾸지 않고 로그만 남긴다. 결제 키는 싣지 않는다.
+ *
+ * 결제사 조회는 요청 스레드에서 최대 약 63초(연결 3 + 읽기 60) 기다린다. 결제 승인과 같은 웹 스레드를 쓰므로, 관리자 조치가 몰려 스레드를
+ * 묶지 않게 인스턴스당 동시 조치 수를 둔다(nova.payment.refund-admin.max-concurrent, 기본 2). 넘으면 기다리지 않고 아무것도 바꾸지 않은 채
+ * REFUND_PROVIDER_UNAVAILABLE(503, details.reason=TOO_MANY_CONCURRENT)로 거절한다 — 관리자는 잠시 뒤 다시 한다. 자리는 조회 전에 잡고
+ * 반영까지 끝난 뒤 돌려준다.
  */
 @Service
 public class RefundAdmin {
@@ -71,10 +78,16 @@ public class RefundAdmin {
     private final RefundAdminActions actions;
     private final TransactionTemplate writeTransaction;
     private final Clock clock;
+    private final Semaphore slots;
 
     RefundAdmin(PaymentTransactionReader transactions, PaymentReader payments, PaymentLedger ledger,
                 RefundSettlement settlement, TossPaymentClient toss, RefundIssueQuery issueQuery, RefundAdminActions actions,
-                PlatformTransactionManager transactionManager, Clock clock) {
+                PlatformTransactionManager transactionManager, Clock clock,
+                @Value("${nova.payment.refund-admin.max-concurrent:2}") int maxConcurrent) {
+        if (maxConcurrent < 1) {
+            throw new IllegalArgumentException("nova.payment.refund-admin.max-concurrent 는 1 이상이다: " + maxConcurrent);
+        }
+        this.slots = new Semaphore(maxConcurrent);
         this.transactions = transactions;
         this.payments = payments;
         this.ledger = ledger;
@@ -107,6 +120,10 @@ public class RefundAdmin {
      * @return 새로 연 거래(PENDING). 워커가 집어 보낸다
      */
     public RefundAdminResult retry(UUID orderId, UUID expectedTransactionId, String note, String requestedBy) {
+        return withSlot(orderId, requestedBy, "RETRY", () -> doRetry(orderId, expectedTransactionId, note, requestedBy));
+    }
+
+    private RefundAdminResult doRetry(UUID orderId, UUID expectedTransactionId, String note, String requestedBy) {
         PaymentTarget target = PaymentTarget.order(orderId);
         Current current = current(target, expectedTransactionId);
         RefundIssue issue = RefundIssue.of(orderId, Optional.of(current.payment()), Optional.of(current.last()),
@@ -147,6 +164,11 @@ public class RefundAdmin {
      * @return 환불 완료로 반영한 거래와 결제사의 취소 시각
      */
     public RefundAdminResult manualComplete(UUID orderId, UUID expectedTransactionId, String note, String requestedBy) {
+        return withSlot(orderId, requestedBy, "MANUAL_COMPLETE",
+                () -> doManualComplete(orderId, expectedTransactionId, note, requestedBy));
+    }
+
+    private RefundAdminResult doManualComplete(UUID orderId, UUID expectedTransactionId, String note, String requestedBy) {
         PaymentTarget target = PaymentTarget.order(orderId);
         Current current = current(target, expectedTransactionId);
         RefundIssue issue = RefundIssue.of(orderId, Optional.of(current.payment()), Optional.of(current.last()),
@@ -175,6 +197,20 @@ public class RefundAdmin {
         log.warn("관리자 직접 환불 기록 — 환불 완료로 반영했다 orderId={} previousTransactionId={} transactionId={} requestedBy={}",
                 orderId, last.id(), settled, requestedBy);
         return new RefundAdminResult(settled, TransactionStatus.SUCCEEDED, canceledAt.get());
+    }
+
+    /** 자리를 잡지 못하면 아무것도 읽거나 바꾸지 않고 거절한다. 자리는 결과 · 예외와 상관없이 돌려준다. */
+    private RefundAdminResult withSlot(UUID orderId, String requestedBy, String action, Supplier<RefundAdminResult> work) {
+        if (!slots.tryAcquire()) {
+            log.warn("관리자 환불 조치 — 동시 조치 상한이라 받지 않음 orderId={} action={} requestedBy={}", orderId, action,
+                    requestedBy);
+            throw new BusinessException(PaymentErrorCode.REFUND_PROVIDER_UNAVAILABLE, Map.of("reason", "TOO_MANY_CONCURRENT"));
+        }
+        try {
+            return work.get();
+        } finally {
+            slots.release();
+        }
     }
 
     private static boolean inProgress(RefundIssue issue) {

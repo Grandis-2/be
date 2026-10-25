@@ -18,6 +18,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -74,33 +75,51 @@ public class RefundIssues {
     }
 
     /**
-     * 주문 쪽에서 고른 것(오래 바뀌지 않은 것부터) 뒤에 결제 쪽에서만 고른 것(만든 순)을 붙인다.
+     * 주문 쪽 후보와 결제 쪽 후보를 합쳐 오래 멈춘 것부터 상한({@link #MAX})까지. 한쪽을 먼저 채우고 자르면 그쪽 후보가 상한을 채웠을 때 다른
+     * 쪽(결제 쪽의 확정 실패 · 에스컬레이션)이 한 건도 보이지 않는다.
      *
      * @param staleHours 진행 중 · 요청한 지 이만큼 지나야 멈춘 것으로 본다
      */
     public List<RefundIssue> list(int staleHours, String sessionToken) {
+        return list(staleHours, sessionToken, MAX, LOOKUP_CHUNK);
+    }
+
+    /** 상한 · 나눠 묻는 수를 시험에서 낮춘다 — 상한까지 주문을 만들면 공유 DB 의 다른 시험(실행 계획)에 끼어든다. */
+    List<RefundIssue> list(int staleHours, String sessionToken, int limit, int lookupChunk) {
         Instant staleBefore = clock.instant().minus(Duration.ofHours(staleHours));
         Map<UUID, Order> orders = new LinkedHashMap<>();
-        orderReader.findRefundStuckOrders(staleBefore, MAX).forEach(order -> orders.put(order.id(), order));
+        orderReader.findRefundStuckOrders(staleBefore, limit).forEach(order -> orders.put(order.id(), order));
         Map<UUID, PaymentRefundIssue> byOrder = new LinkedHashMap<>();
         payments.issues(List.of(), staleHours, sessionToken).forEach(issue -> byOrder.put(issue.orderId(), issue));
         List<UUID> unknownToPayment = orders.keySet().stream().filter(id -> !byOrder.containsKey(id)).toList();
-        for (int from = 0; from < unknownToPayment.size(); from += LOOKUP_CHUNK) {
-            List<UUID> chunk = unknownToPayment.subList(from, Math.min(from + LOOKUP_CHUNK, unknownToPayment.size()));
+        for (int from = 0; from < unknownToPayment.size(); from += lookupChunk) {
+            List<UUID> chunk = unknownToPayment.subList(from, Math.min(from + lookupChunk, unknownToPayment.size()));
             payments.issues(chunk, staleHours, sessionToken).forEach(issue -> byOrder.put(issue.orderId(), issue));
         }
         Set<UUID> ids = new LinkedHashSet<>(orders.keySet());
         ids.addAll(byOrder.keySet());
         List<RefundIssue> issues = new ArrayList<>();
         for (UUID id : ids) {
-            if (issues.size() == MAX) {
-                break;
-            }
             Optional<Order> order = Optional.ofNullable(orders.get(id)).or(() -> orderReader.findById(id));
             issues.add(RefundIssue.of(order.orElse(null), order.flatMap(o -> orderReader.findAutoRefundRequestedAt(o.id())),
                     byOrder.get(id), id));
         }
-        return issues;
+        return issues.stream().sorted(Comparator.comparing(RefundIssues::stuckSince).thenComparing(RefundIssue::orderId))
+                .limit(limit).toList();
+    }
+
+    /**
+     * 멈춘 기준 시각 — 주문이 마지막으로 바뀐 시각(취소 중으로 바뀜 · 환불 실패를 적음)과 마지막 환불 거래를 연 시각 중 이른 것. 어느 쪽이든 그
+     * 뒤로 일이 진행되지 않았다는 뜻이고, 이른 쪽이 더 오래 멈춘 것이다. 둘 다 없으면(주문도 거래도 모른다) 맨 뒤다.
+     */
+    private static Instant stuckSince(RefundIssue issue) {
+        Instant orderSince = issue.order() == null ? null : issue.order().updatedAt();
+        Instant refundSince = issue.payment() == null || issue.payment().refund() == null
+                ? null : issue.payment().refund().createdAt();
+        if (orderSince == null) {
+            return refundSince == null ? Instant.MAX : refundSince;
+        }
+        return refundSince == null || orderSince.isBefore(refundSince) ? orderSince : refundSince;
     }
 
     /**

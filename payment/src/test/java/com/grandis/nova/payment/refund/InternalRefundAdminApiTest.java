@@ -54,6 +54,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.BDDMockito.given;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -356,6 +357,40 @@ class InternalRefundAdminApiTest {
         assertThat(outcomes).allMatch(Concurrently.Outcome::succeeded);
         assertThat(outcomes.stream().map(Concurrently.Outcome::value).filter(code -> code == 200)).hasSize(1);
         assertThat(settledEvents()).isEqualTo(1);
+        assertThat(actionCount()).isEqualTo(1);
+    }
+
+    @Test
+    void 동시_조치_상한을_넘는_요청은_기다리지_않고_503_이며_아무것도_바꾸지_않는다() throws Exception {
+        PaymentTransaction rejected = rejectedRefund();
+        java.util.concurrent.CountDownLatch entered = new java.util.concurrent.CountDownLatch(2);
+        java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+        given(toss.findByPaymentKey(paymentKey.value())).willAnswer(invocation -> {
+            entered.countDown();
+            release.await(30, java.util.concurrent.TimeUnit.SECONDS);
+            return found(TossPaymentStatus.CANCELED, WON, 0, List.of(new TossPayment.Cancel(CANCELED_AT, WON)));
+        });
+        var executor = java.util.concurrent.Executors.newFixedThreadPool(2);
+        try {
+            List<java.util.concurrent.Future<Integer>> holding = List.of(
+                    executor.submit(() -> asAdmin(manualComplete(rejected.id(), "직접")).andReturn().getResponse().getStatus()),
+                    executor.submit(() -> asAdmin(manualComplete(rejected.id(), "직접")).andReturn().getResponse().getStatus()));
+            assertThat(entered.await(30, java.util.concurrent.TimeUnit.SECONDS)).as("두 조치가 결제사 조회 중").isTrue();
+
+            asAdmin(manualComplete(rejected.id(), "세 번째"))
+                    .andExpect(status().isServiceUnavailable())
+                    .andExpect(jsonPath("$.error.code").value("REFUND_PROVIDER_UNAVAILABLE"))
+                    .andExpect(jsonPath("$.error.details.reason").value("TOO_MANY_CONCURRENT"));
+            verify(toss, times(2)).findByPaymentKey(any());
+            assertThat(statusOf(rejected)).isEqualTo(TransactionStatus.FAILED);
+            assertThat(actionCount()).isZero();
+
+            release.countDown();
+            assertThat(List.of(holding.get(0).get(), holding.get(1).get())).containsExactlyInAnyOrder(200, 409);
+        } finally {
+            release.countDown();
+            executor.shutdownNow();
+        }
         assertThat(actionCount()).isEqualTo(1);
     }
 

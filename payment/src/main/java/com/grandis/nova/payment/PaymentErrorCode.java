@@ -38,7 +38,7 @@ public enum PaymentErrorCode implements ErrorCode {
     REFUND_NOT_RETRYABLE(409, "다시 시도할 수 없는 환불입니다."),
     /** 결제사 조회가 전액 취소가 아니다. details 에 결제사 상태 · 처음 금액 · 잔액 · 취소 건수를 싣는다(결제 키는 싣지 않는다). */
     REFUND_NOT_CANCELED_AT_PROVIDER(409, "결제사에서 전액 취소가 확인되지 않습니다."),
-    /** 결제사 조회 결과를 몰랐다 — 아무것도 바꾸지 않았다. 잠시 뒤 다시 한다. */
+    /** 결제사 조회 결과를 몰랐거나 동시 조치 상한이다(details.reason=TOO_MANY_CONCURRENT) — 아무것도 바꾸지 않았다. 잠시 뒤 다시 한다. */
     REFUND_PROVIDER_UNAVAILABLE(503, "결제사 조회에 실패했습니다. 잠시 후 다시 시도해 주세요.");
 
     private final int status;
