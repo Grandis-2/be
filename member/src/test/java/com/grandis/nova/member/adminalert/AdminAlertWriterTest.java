@@ -25,6 +25,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -226,7 +227,7 @@ class AdminAlertWriterTest {
         awaitLatch(newerApplied);
         AtomicReference<Outcome> olderOutcome = new AtomicReference<>();
         Thread olderThread = Thread.ofPlatform().start(() -> olderOutcome.set(transactions.execute(tx -> writer.apply(older, null))));
-        Thread.sleep(500);   // 오래된 사건이 넣고 잠금 재확인에서 최신 사건의 커밋을 기다리는 동안
+        awaitLockWait();   // 오래된 사건이 최신 사건의 미커밋 행을 기다린다
         commitNewer.countDown();
         newerThread.join(10_000);
         olderThread.join(10_000);
@@ -263,7 +264,8 @@ class AdminAlertWriterTest {
         awaitLatch(locked);
         AtomicReference<Outcome> outcome = new AtomicReference<>();
         Thread updater = Thread.ofPlatform().start(() -> outcome.set(transactions.execute(tx -> writer.apply(update, null))));
-        Thread.sleep(300);   // 갱신이 시각을 잡고 잠금 대기에 들어가는 동안
+        // 갱신이 시각(T0)을 잡은 뒤 행 잠금을 기다리기 시작할 때까지 — 늦게 시작해 옮긴 시각을 처음 잡으면 다시 찍기 없이도 통과한다
+        awaitLockWait();
         clock.advance(Duration.ofSeconds(15));
         tail.tick();   // 창이 T0 + 5초로 옮겨진다 — 처음 잡은 시각(T0)으로 커밋되면 창 밖이다
         release.countDown();
@@ -280,6 +282,41 @@ class AdminAlertWriterTest {
         verify(streams, times(2)).publish(sent.capture(), anyMap());
         assertThat(sent.getAllValues().getLast()).extracting(AdminAlertResponse::notificationId).containsExactly(id);
         assertThat(sent.getAllValues().getLast().getFirst().metrics().get("deadLetters").asInt()).isEqualTo(10);
+    }
+
+    @Test
+    @DisplayName("다시 찍기는 이 트랜잭션이 바꾼 행만 건드린다 — 같은 마이크로초에 시작한 다른 알림의 행(잠김)을 기다리지도 옮기지도 않는다")
+    void restampTouchesOnlyOwnRows() throws Exception {
+        AdminAlertWriter plain = new AdminAlertWriter(jdbc, JSON, clock);
+        // 시작 시각을 실행마다 새로 고른다 — 앞선 시험이 같은 키로 넣었다 지운 행이 정리 전이면 INSERT 의 중복 확인이 이웃 행(첫 알림의 미커밋 행)을
+        // 기다려, 다시 찍기와 상관없이 둘째가 멈춘다(실측: 전체 실행에서만)
+        String startsAt = Instant.now().truncatedTo(ChronoUnit.SECONDS).toString();
+        AdminAlertSignal first = grafana.parse(AdminAlertMessages.Grafana.firing("SHIPPING_BACKLOG", startsAt)
+                .metric("total", "58").body()).getFirst();
+        AdminAlertSignal second = grafana.parse(registerFailed(startsAt, "3")).getFirst();
+        CountDownLatch firstApplied = new CountDownLatch(1);
+        CountDownLatch commitFirst = new CountDownLatch(1);
+        // 첫 알림은 시각 T0 로 넣고 커밋하지 않은 채 행을 쥐고 있다
+        Thread holder = Thread.ofPlatform().start(() -> transactions.executeWithoutResult(tx -> {
+            plain.apply(first, null);
+            firstApplied.countDown();
+            awaitLatch(commitFirst);
+        }));
+        awaitLatch(firstApplied);
+        // 둘째 알림도 T0 에 시작하고, 잠금 읽기 뒤에 시계가 1초 가서 다시 찍기가 실제로 문장을 낸다
+        AdminAlertWriter secondWriter = new AdminAlertWriter(new HookedJdbc(jdbc, AdminAlertWriterTest::isRowLock,
+                () -> clock.advance(Duration.ofSeconds(1)), null), JSON, clock);
+        AtomicReference<Outcome> secondOutcome = new AtomicReference<>();
+        Thread other = Thread.ofPlatform().start(() -> secondOutcome.set(transactions.execute(tx -> secondWriter.apply(second, null))));
+
+        other.join(5_000);
+        assertThat(other.isAlive()).as("남의 행(첫 알림, 잠김)을 다시 찍으려 기다리지 않는다").isFalse();
+        commitFirst.countDown();
+        holder.join(10_000);
+
+        assertThat(secondOutcome.get()).isEqualTo(Outcome.CREATED);
+        assertThat(only("SHIPPING_BACKLOG").get("changed_at")).as("첫 알림의 시각은 그대로").isEqualTo(utc(T0));
+        assertThat(only("REGISTER_FAILED").get("changed_at")).isEqualTo(utc(T0.plusSeconds(1)));
     }
 
     @Test
@@ -381,7 +418,7 @@ class AdminAlertWriterTest {
         AdminAlertSignal signal = grafana.parse(registerFailed("2026-10-26T05:00:00Z", "1")).getFirst();
         // 둘 다 잠금 읽기(없음)를 마친 뒤에 넣게 맞춘다 — 그래야 진 쪽이 반드시 생긴다
         CyclicBarrier bothRead = new CyclicBarrier(2);
-        AdminAlertWriter racing = new AdminAlertWriter(new HookedJdbc(jdbc, sql -> sql.contains("FOR UPDATE"), () -> await(bothRead), null),
+        AdminAlertWriter racing = new AdminAlertWriter(new HookedJdbc(jdbc, AdminAlertWriterTest::isRowLock, () -> await(bothRead), null),
                 JSON, clock);
 
         List<Concurrently.Outcome<Outcome>> results = Concurrently.run(2, i -> () -> transactions.execute(tx -> racing.apply(signal, null)));
@@ -415,7 +452,7 @@ class AdminAlertWriterTest {
         awaitLatch(settledApplied);
         AtomicReference<Outcome> delayedOutcome = new AtomicReference<>();
         Thread delayer = Thread.ofPlatform().start(() -> delayedOutcome.set(transactions.execute(tx -> writer.apply(delayed, null))));
-        Thread.sleep(500);   // DELAYED 가 넣고 잠금 재확인에서 SETTLED 의 커밋을 기다리는 동안
+        awaitLockWait();   // DELAYED 가 SETTLED 의 미커밋 행을 기다린다
         commitSettled.countDown();
         settler.join(10_000);
         delayer.join(10_000);
@@ -446,7 +483,7 @@ class AdminAlertWriterTest {
         awaitLatch(delayedApplied);
         AtomicReference<Outcome> settledOutcome = new AtomicReference<>();
         Thread settler = Thread.ofPlatform().start(() -> settledOutcome.set(transactions.execute(tx -> writer.apply(settled, null))));
-        Thread.sleep(500);   // SETTLED 의 해소(UPDATE)가 DELAYED 의 미커밋 행에서 기다리는 동안
+        awaitLockWait();   // SETTLED 의 해소가 DELAYED 의 미커밋 행을 기다린다
         commitDelayed.countDown();
         delayer.join(10_000);
         settler.join(10_000);
@@ -515,6 +552,31 @@ class AdminAlertWriterTest {
             Thread.currentThread().interrupt();
             throw new IllegalStateException(e);
         }
+    }
+
+    /** 사건 행을 잡는 잠금 읽기(Writer 의 첫 문장). 앞 사건 고르기 · 해소 대상 고르기의 FOR UPDATE 와 가른다. */
+    private static boolean isRowLock(String sql) {
+        return sql.contains("SELECT id, status, severity") && sql.contains("FOR UPDATE");
+    }
+
+    /**
+     * 다른 연결이 admin_alerts 문장을 실행 중일 때까지 기다린다 — 잠금을 쥔 쪽은 커밋 전에 쉬고 있으므로, 실행 중인 문장은 기다리는 쪽의 것뿐이다.
+     * 기다리는 문장을 하나로 정하지 않는다: 앞선 시험이 지운 행이 아직 정리(purge)되지 않았으면 INSERT 의 중복 확인이 다음 행(상대의 미커밋 행)을
+     * 잠그려 INSERT 에서 기다린다(실측: 전체 실행에서만). 10초 안에 없으면 실패.
+     */
+    private void awaitLockWait() throws InterruptedException {
+        String pattern = "%admin_alerts%";
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (System.nanoTime() < deadline) {
+            Integer waiting = jdbc.queryForObject("""
+                    SELECT COUNT(*) FROM information_schema.PROCESSLIST
+                     WHERE ID <> CONNECTION_ID() AND COMMAND = 'Query' AND LOWER(INFO) LIKE ?""", Integer.class, pattern);
+            if (waiting != null && waiting > 0) {
+                return;
+            }
+            Thread.sleep(20);
+        }
+        throw new AssertionError("10초 안에 잠금 대기가 시작되지 않았다: " + pattern);
     }
 
     private static void awaitLatch(CountDownLatch latch) {

@@ -1,6 +1,7 @@
 package com.grandis.nova.member.adminalert;
 
 import com.grandis.nova.member.adminalert.AdminAlertRules.TargetKind;
+import com.grandis.nova.common.UuidBinary;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -16,6 +17,7 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
 import java.util.List;
+import java.util.UUID;
 
 /**
  * 관리자 알림 정리(RefreshTokenCleanup 과 같은 방식). 두 가지를 한다.
@@ -40,9 +42,10 @@ class AdminAlertCleanup {
             SELECT target_kind, target_id FROM admin_alerts
              WHERE target_name IS NULL AND target_kind IN ('PRODUCT', 'DRAW') AND created_at >= ?
              GROUP BY target_kind, target_id ORDER BY MAX(created_at) DESC LIMIT ?""";
+    private static final String NAMELESS_OF_TARGET = """
+            SELECT id FROM admin_alerts WHERE target_kind = ? AND target_id = ? AND target_name IS NULL FOR UPDATE""";
     private static final String FILL = """
-            UPDATE admin_alerts SET target_name = ?, changed_at = ?, version = version + 1
-             WHERE target_kind = ? AND target_id = ? AND target_name IS NULL""";
+            UPDATE admin_alerts SET target_name = ?, changed_at = ?, version = version + 1 WHERE id = ? AND target_name IS NULL""";
 
     /**
      * @param retention        해소 뒤 보관 기간
@@ -123,9 +126,12 @@ class AdminAlertCleanup {
             }
             // 저장 중인 알림의 잠금을 기다릴 수 있어 묶고, 커밋 직전에 changed_at 을 다시 찍는다(AdminAlertWriter 와 같은 까닭)
             transactions.executeWithoutResult(tx -> {
-                Instant written = AdminAlertWriter.micros(clock.instant());
-                jdbc.update(FILL, lookup.name(), AdminAlertWriter.utc(written), kind.name(), target.get(1));
-                AdminAlertWriter.restamp(jdbc, written, clock);
+                Object written = AdminAlertWriter.utc(clock.instant());
+                List<UUID> ids = jdbc.query(NAMELESS_OF_TARGET, (rs, i) -> UuidBinary.fromBytes(rs.getBytes(1)), kind.name(), target.get(1));
+                for (UUID id : ids) {
+                    jdbc.update(FILL, lookup.name(), written, UuidBinary.toBytes(id));
+                }
+                AdminAlertWriter.restamp(jdbc, ids, clock);
             });
             filled++;
         }

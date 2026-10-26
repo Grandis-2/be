@@ -54,18 +54,19 @@ class AdminAlertService {
     @Transactional
     void markRead(UUID id) {
         Instant now = now();
-        if (queries.markRead(id, now) == 0 && !queries.exists(id)) {
-            throw new BusinessException(CommonErrorCode.NOT_FOUND, "알림을 찾을 수 없습니다.");
+        if (queries.markRead(id, now) == 0) {
+            if (!queries.exists(id)) {
+                throw new BusinessException(CommonErrorCode.NOT_FOUND, "알림을 찾을 수 없습니다.");
+            }
+            return;
         }
-        queries.restamp(now, clock);
+        queries.restamp(List.of(id), clock);
     }
 
     @Transactional
     void markAllRead(Audience audience) {
         Instant now = now();
-        if (queries.markAllRead(audience, now) > 0) {
-            queries.restamp(now, clock);
-        }
+        queries.restamp(queries.markAllRead(audience, now), clock);
     }
 
     AdminAlertResponse response(AdminAlertQueries.View view) {
