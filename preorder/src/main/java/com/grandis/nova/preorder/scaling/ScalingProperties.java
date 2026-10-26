@@ -48,14 +48,19 @@ record ScalingProperties(
      * @param max             최대 대수. Terraform 의 max 와 같게 둔다 — 최소를 이보다 높이면 AWS 가 거절한다
      * @param visitorsPerTask 태스크 하나가 맡는 예상 방문자 수. 기본 5,000 — 대기 중 폴링은 대부분 10~30초 주기라 1인당 약 0.1건/초,
      *                        태스크 하나가 약 500건/초를 받는다고 본 값이다. 측정 전 임시값이다
+     * @param surge           회차가 열릴 때의 최소 대수. 기본 3 — 예상 방문자 수를 넣지 않은 회차도 오픈 직후 몰림을 1대가 받지 않게
      */
     record Waitingroom(@DefaultValue("") String service, @DefaultValue("1") int baseline,
-                       @DefaultValue("5") int max, @DefaultValue("5000") int visitorsPerTask) {
+                       @DefaultValue("5") int max, @DefaultValue("5000") int visitorsPerTask,
+                       @DefaultValue("3") int surge) {
 
         Waitingroom {
             requireRange("waitingroom", baseline, max);
             if (visitorsPerTask < 1) {
                 throw new IllegalArgumentException("nova.scaling.waitingroom.visitors-per-task 는 1 이상이어야 한다");
+            }
+            if (surge < baseline) {
+                throw new IllegalArgumentException("nova.scaling.waitingroom.surge 는 baseline 이상이어야 한다");
             }
         }
     }

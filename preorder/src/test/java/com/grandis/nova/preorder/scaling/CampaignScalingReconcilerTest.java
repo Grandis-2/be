@@ -38,7 +38,7 @@ class CampaignScalingReconcilerTest {
     void setUp() {
         ScalingProperties properties = new ScalingProperties(false, Duration.ofMinutes(1), "ap-northeast-2", "",
                 Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofMinutes(1),
-                new ScalingProperties.Waitingroom(WAITINGROOM, 1, 5, 5000),
+                new ScalingProperties.Waitingroom(WAITINGROOM, 1, 5, 5000, 3),
                 new ScalingProperties.Preorder(PREORDER, 1, 5, 3));
         when(lock.tryAcquire()).thenReturn("token");
         reconciler = new CampaignScalingReconciler(campaigns, properties, floors, lock, admissionCredit, 100,
@@ -93,7 +93,7 @@ class CampaignScalingReconcilerTest {
         reconciler.reconcileExclusively();
 
         verify(floors).ensure(PREORDER, 3);
-        verify(floors).ensure(WAITINGROOM, 1);
+        verify(floors).ensure(WAITINGROOM, 3);
         assertThat(failures()).isEqualTo(1);
         assertThat(admissionTarget()).isZero();
     }
