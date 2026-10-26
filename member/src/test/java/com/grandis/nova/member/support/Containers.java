@@ -24,7 +24,15 @@ public final class Containers {
     static final String REDIS_IMAGE = "redis:8";
     private static final int REDIS_PORT = 6379;
 
-    public static final MySQLContainer MYSQL = new MySQLContainer(MYSQL_IMAGE).withDatabaseName("shop");
+    /**
+     * 스프링은 시험 컨텍스트를 최대 32개까지 열어 둔 채 캐시하고, 컨텍스트마다 Hikari 가 연결 10개를 쥔다. MySQL 기본 상한(151)이면 컨텍스트가
+     * 15개를 넘는 순간 뒤에 뜨는 시험이 "Too many connections" 로 엉뚱하게 실패한다(실측: 관리자 알림 시험을 더했을 때 DdlValidateProbeTest).
+     * 캐시가 다 차도 넘지 않게 연다.
+     */
+    static final int MAX_CONNECTIONS = 400;
+
+    public static final MySQLContainer MYSQL = new MySQLContainer(MYSQL_IMAGE).withDatabaseName("shop")
+            .withCommand("--max-connections=" + MAX_CONNECTIONS);
     public static final GenericContainer<?> REDIS = new GenericContainer<>(REDIS_IMAGE).withExposedPorts(REDIS_PORT);
 
     static {

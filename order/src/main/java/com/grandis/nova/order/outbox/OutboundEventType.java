@@ -21,7 +21,7 @@ public enum OutboundEventType implements OutboxEventType {
     NOTIFICATION_REQUESTED("notification"),
     /** 일반 판매 상품의 재고 행을 새로 만듦(판매 준비) — catalog 가 받아 상품을 판매 준비로 남긴다(contracts/order-catalog-events.md). */
     IN_STOCK_PRODUCT_READY("catalog-events"),
-    /** 관리자 알림 한 건(드로우 반영 완료 · 지연) — 허브가 받아 저장한다(contracts/admin-alert-events.md). */
+    /** 관리자 알림 한 건(드로우 반영 완료 · 지연) — member 가 받아 저장한다(contracts/admin-alert-events.md). */
     ADMIN_ALERT_REQUESTED("admin-alert");
 
     private final String destination;

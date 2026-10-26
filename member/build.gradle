@@ -1,6 +1,6 @@
 apply plugin: 'org.springframework.boot'
 
-// 카카오 로그인(프론트 주도 코드 교환, D-1) · JWT 발급 · 관리자 로그인 · 회원 · 알림 저장(notification 큐).
+// 카카오 로그인(프론트 주도 코드 교환, D-1) · JWT 발급 · 관리자 로그인 · 회원 · 알림 저장(notification 큐) · 관리자 알림(admin-alert · Grafana 큐).
 // spring-security-oauth2-client 는 쓰지 않는다. 카카오 호출은 RestClient 두 번이다.
 dependencies {
     implementation project(':common:types')
@@ -11,6 +11,8 @@ dependencies {
     implementation project(':common:message')
     implementation project(':common:sqs')
     implementation 'org.springframework.boot:spring-boot-starter-web'
+    // 관리자 알림 대상 이름(catalog · order 공개 조회)을 HTTP Interface(@HttpExchange) + RestClient 로 부른다(order 와 같은 구성)
+    implementation 'org.springframework.boot:spring-boot-starter-restclient'
     implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
     implementation 'org.springframework.boot:spring-boot-starter-security'
     // 헬스 체크(ALB). 앱 포트와 나눈 관리 포트의 readiness 만 내놓는다 — MemberDefaults

@@ -39,7 +39,13 @@ class MemberDefaults implements EnvironmentPostProcessor, Ordered {
             // readiness 는 앱의 준비 상태만 본다(Boot 기본 구성과 같지만 고정한다). DB · Redis 를 넣으면 공용 의존성 장애 한 번에 모든 태스크가
             // 비정상이 돼 ECS 가 태스크를 갈아 끼운다
             "management.endpoint.health.group.readiness.include", "readinessState",
-            "auth.revocation-check.fail-closed-paths", String.join(",", FAIL_CLOSED_PATHS));
+            "auth.revocation-check.fail-closed-paths", String.join(",", FAIL_CLOSED_PATHS),
+            // 관리자 알림 대상 이름(catalog 상품 · order 회차 공개 조회). 표시용이라 못 받으면 이름 없이 저장하므로 짧게 기다린다. 주소는 환경마다 달라
+            // 여기 두지 않는다(spring.http.serviceclient.<그룹>.base-url, 인프라 calls)
+            "spring.http.serviceclient.catalog.connect-timeout", "300ms",
+            "spring.http.serviceclient.catalog.read-timeout", "1s",
+            "spring.http.serviceclient.order.connect-timeout", "300ms",
+            "spring.http.serviceclient.order.read-timeout", "1s");
 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {

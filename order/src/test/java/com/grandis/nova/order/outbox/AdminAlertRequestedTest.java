@@ -13,7 +13,7 @@ import java.util.UUID;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** 종류마다 metrics 모양이 정해져 있다 — 허브가 종류로 칸을 읽으므로 어긋난 메시지는 만들지 못한다. */
+/** 종류마다 metrics 모양이 정해져 있다 — member 가 종류로 칸을 읽으므로 어긋난 메시지는 만들지 못한다. */
 class AdminAlertRequestedTest {
 
     static final UUID DRAW_ID = UUID.fromString("0199a3f2-8a10-7b21-9c32-4d5e6f708192");
