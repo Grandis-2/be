@@ -208,6 +208,9 @@ app_json() {
                 "spring.http.serviceclient.catalog.base-url": url("catalog"),
                 "spring.http.serviceclient.payment.base-url": url("payment"),
                 "spring.http.serviceclient.payment-confirm.base-url": url("payment")},
+        # 관리자 알림 대상 이름(catalog 상품 · order 회차 공개 조회)
+        member: {"spring.http.serviceclient.catalog.base-url": url("catalog"),
+                 "spring.http.serviceclient.order.base-url": url("order")},
         payment: {"spring.http.serviceclient.toss.base-url": "http://127.0.0.1:\($toss)"},
         waitingroom: {"waitingroom.relay.preorder-uri": url("preorder")},
         worker: {"spring.cloud.aws.sqs.endpoint": "http://floci:4566"}

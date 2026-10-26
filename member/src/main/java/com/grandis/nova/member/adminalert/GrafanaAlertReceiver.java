@@ -87,12 +87,15 @@ class GrafanaAlertReceiver {
         Instant seenAt = sentAt == null ? now : sentAt;
         List<AdminAlertSignal> signals = new ArrayList<>();
         for (JsonNode alert : alerts) {
-            signals.add(signal(alert, now, seenAt));
+            signals.add(signal(alert, seenAt));
         }
         return signals;
     }
 
-    private AdminAlertSignal signal(JsonNode alert, Instant now, Instant seenAt) {
+    private AdminAlertSignal signal(JsonNode alert, Instant seenAt) {
+        if (alert == null || !alert.isObject()) {
+            throw invalid("alerts 의 원소가 객체가 아니다: " + (alert == null ? null : alert.getNodeType()));
+        }
         String status = AdminAlertEventReceiver.text(alert.get("status"));
         if (!"firing".equals(status) && !"resolved".equals(status)) {
             throw invalid("status 는 firing · resolved 다: " + status);
@@ -116,7 +119,10 @@ class GrafanaAlertReceiver {
         }
         boolean resolved = "resolved".equals(status);
         Instant endsAt = time(alert.get("endsAt"), "endsAt", type);
-        Instant resolvedAt = resolved ? (endsAt == null ? now : endsAt) : null;
+        if (resolved && endsAt == null) {
+            throw invalid(type + " 의 resolved 에 endsAt 이 없다 — 해소 시각을 지어내지 않는다");
+        }
+        Instant resolvedAt = resolved ? endsAt : null;
         ObjectNode metrics = metrics(alert.get("annotations"));
         if (!AdminAlertMetrics.storable(metrics)) {
             throw invalid(type + " 의 metric_* 에 JSON 칸이 담을 수 없는 숫자(double 범위 밖)가 있다");

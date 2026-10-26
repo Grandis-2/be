@@ -34,7 +34,7 @@ class AdminAlertStreamsTest {
 
     final SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
     final AdminAlertStreams streams = new AdminAlertStreams(
-            new AdminAlertStreamProperties(Duration.ofSeconds(25), Duration.ofMinutes(30), 2, 3, 3, Duration.ofSeconds(2),
+            new AdminAlertStreamProperties(Duration.ofSeconds(25), Duration.ofMinutes(30), 2, 3, 3, 2, Duration.ofSeconds(2),
                     Duration.ofSeconds(10)),
             Clock.fixed(NOW, ZoneOffset.UTC), meterRegistry);
 
@@ -144,6 +144,22 @@ class AdminAlertStreamsTest {
         assertThat(meterRegistry.counter(AdminAlertStreams.CLOSED_METRIC, "reason", "replaced").count()).isEqualTo(1);
         assertThatThrownBy(() -> streams.register("other", null, new RecordingEmitter(null)))
                 .hasMessageContaining("가득 찼다");
+    }
+
+    @Test
+    @DisplayName("대량 변경은 모든 연결에 resync 하나와 unread 를 보낸다 — 연결은 그대로다")
+    void resyncGoesToEveryConnection() {
+        RecordingEmitter admin = new RecordingEmitter(null);
+        RecordingEmitter developer = new RecordingEmitter(null);
+        streams.register("admin", Audience.ADMIN, admin);
+        streams.register("ops", Audience.DEVELOPER, developer);
+
+        streams.resync(unread());
+
+        await().atMost(WAIT).until(() -> admin.sent.size() == 2 && developer.sent.size() == 2);
+        assertThat(admin.names()).containsExactly("resync", "unread");
+        assertThat(developer.names()).containsExactly("resync", "unread");
+        assertThat(streams.size()).isEqualTo(2);
     }
 
     @Test

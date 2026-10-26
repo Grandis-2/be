@@ -63,6 +63,25 @@ class AdminAlertCleanupTest {
     }
 
     @Test
+    @DisplayName("다시 묻는 대상은 대상 단위로 고른다 — 이름 없는 한 대상의 행이 한도(시험 2)보다 많아도 다른 대상의 자리를 차지하지 않는다")
+    void refillPicksTargetsNotRows() {
+        cleanup = new AdminAlertCleanup(jdbc, names, clock, new AdminAlertCleanup.Settings(Duration.ofDays(30), 2, 10, Duration.ofDays(1), 2));
+        UUID crowded = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        events.receive(AdminAlertMessages.Event.draw("DRAW_DELAYED", other, "2026-11-30T00:00:00Z").body());
+        for (int i = 0; i < 3; i++) {
+            events.receive(AdminAlertMessages.Event.preorder("PREORDER_OPENED", crowded, UUID.randomUUID(), "2026-11-30T0" + (i + 1) + ":00:00Z")
+                    .body());
+        }
+        when(names.find(TargetKind.DRAW, other.toString())).thenReturn(new TargetNames.Lookup("매직 키보드", false));
+        clearInvocations(names);
+
+        assertThat(cleanup.refillNames()).isEqualTo(1);
+        verify(names).find(TargetKind.PRODUCT, crowded.toString());
+        verify(names).find(TargetKind.DRAW, other.toString());
+    }
+
+    @Test
     @DisplayName("이름이 빈 상품 · 회차 알림 중 하루 안의 것만 다시 묻는다. 없음은 건너뛰고, 실패하면 그 주기를 멈춘다")
     void refillsNames() {
         UUID absent = UUID.randomUUID();

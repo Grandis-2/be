@@ -128,6 +128,7 @@ member:
       max-per-principal: 20
       max-connections: 100
       max-pending: 1000
+      resync-threshold: 100   # 한 주기에 바뀐 행이 이보다 많으면(모두 읽음 등) 행마다 보내지 않고 resync 하나. max-pending 보다 작게
       tail-interval: 2s
       overlap: 10s
     # 해소 뒤 30일 지난 알림을 지우고, 받을 때 이름을 받지 못한 상품 · 회차 알림(하루 안)의 이름을 다시 묻는다. cron 을 "-" 로 두면 끈다

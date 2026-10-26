@@ -25,7 +25,7 @@ class AdminAlertQueries {
 
     private static final String COLUMNS = """
             SELECT id, type, audience, severity, status, source, target_kind, target_id, target_name, metrics, first_occurred_at,
-                   last_updated_at, raised_at, resolved_at, read_at, changed_at FROM admin_alerts""";
+                   last_updated_at, raised_at, resolved_at, read_at, changed_at, version FROM admin_alerts""";
     private static final String CHANGED_FROM = COLUMNS + " WHERE changed_at >= :at ORDER BY changed_at, id LIMIT :limit";
     private static final String CHANGED_AFTER = COLUMNS
             + " WHERE (changed_at > :at OR (changed_at = :at AND id > :id)) ORDER BY changed_at, id LIMIT :limit";
@@ -42,10 +42,10 @@ class AdminAlertQueries {
     record Filter(Audience audience, Status status, List<Severity> severities, boolean unreadOnly) {
     }
 
-    /** 표 한 행. metrics 는 JSON 문자열 그대로다. */
+    /** 표 한 행. metrics 는 JSON 문자열 그대로다. version 은 바뀔 때마다 1씩 오른다. */
     record View(UUID id, String type, Audience audience, Severity severity, Status status, AdminAlertRules.Source source,
                 String targetKind, String targetId, String targetName, String metrics, Instant firstOccurredAt,
-                Instant lastUpdatedAt, Instant raisedAt, Instant resolvedAt, Instant readAt, Instant changedAt) {
+                Instant lastUpdatedAt, Instant raisedAt, Instant resolvedAt, Instant readAt, Instant changedAt, long version) {
     }
 
     /** raised_at · id 내림차순. after 가 있으면 그보다 뒤(더 오래된 것)만. */
@@ -106,7 +106,7 @@ class AdminAlertQueries {
 
     /** @return 바꾼 행 수(0 또는 1). 이미 읽었으면 0 — 처음 읽은 시각을 덮지 않는다 */
     int markRead(UUID id, Instant now) {
-        return jdbc.update("UPDATE admin_alerts SET read_at = :now, changed_at = :now WHERE id = :id AND read_at IS NULL",
+        return jdbc.update("UPDATE admin_alerts SET read_at = :now, changed_at = :now, version = version + 1 WHERE id = :id AND read_at IS NULL",
                 new MapSqlParameterSource("now", AdminAlertWriter.utc(now)).addValue("id", UuidBinary.toBytes(id)));
     }
 
@@ -119,7 +119,8 @@ class AdminAlertQueries {
     /** @param audience null 이면 둘 다 */
     int markAllRead(Audience audience, Instant now) {
         MapSqlParameterSource params = new MapSqlParameterSource("now", AdminAlertWriter.utc(now));
-        String sql = "UPDATE admin_alerts SET read_at = :now, changed_at = :now WHERE read_at IS NULL";
+        // 바뀐 행이 많으면 꼬리 읽기가 행마다 보내지 않고 resync 하나로 알린다(AdminAlertTail)
+        String sql = "UPDATE admin_alerts SET read_at = :now, changed_at = :now, version = version + 1 WHERE read_at IS NULL";
         if (audience != null) {
             sql += " AND audience = :audience";
             params.addValue("audience", audience.name());
@@ -132,5 +133,5 @@ class AdminAlertQueries {
             Status.valueOf(rs.getString("status")), AdminAlertRules.Source.valueOf(rs.getString("source")),
             rs.getString("target_kind"), rs.getString("target_id"), rs.getString("target_name"), rs.getString("metrics"),
             AdminAlertWriter.instant(rs, 11), AdminAlertWriter.instant(rs, 12), AdminAlertWriter.instant(rs, 13),
-            AdminAlertWriter.instant(rs, 14), AdminAlertWriter.instant(rs, 15), AdminAlertWriter.instant(rs, 16));
+            AdminAlertWriter.instant(rs, 14), AdminAlertWriter.instant(rs, 15), AdminAlertWriter.instant(rs, 16), rs.getLong("version"));
 }

@@ -23,12 +23,12 @@ class AdminAlertPropertiesTest {
     class Stream {
 
         static final AdminAlertStreamProperties DEFAULTS = new AdminAlertStreamProperties(Duration.ofSeconds(25), Duration.ofMinutes(30),
-                20, 100, 1000, Duration.ofSeconds(2), Duration.ofSeconds(10));
+                20, 100, 1000, 100, Duration.ofSeconds(2), Duration.ofSeconds(10));
 
         final ApplicationContextRunner runner = new ApplicationContextRunner().withUserConfiguration(StreamConfig.class);
 
         @Test
-        @DisplayName("기본값 — 주기 신호 25초 · 최대 수명 30분 · 계정당 20 · 인스턴스당 100 · 쌓기 1000 · 2초마다 읽기 · 10초 겹침")
+        @DisplayName("기본값 — 주기 신호 25초 · 최대 수명 30분 · 계정당 20 · 인스턴스당 100 · 쌓기 1000 · resync 100 · 2초마다 읽기 · 10초 겹침")
         void defaults() {
             runner.run(ctx -> assertThat(ctx.getBean(AdminAlertStreamProperties.class)).isEqualTo(DEFAULTS));
         }
@@ -37,15 +37,15 @@ class AdminAlertPropertiesTest {
         @DisplayName("application.yml.example 의 값이 기본값과 같게 바인딩된다")
         void exampleBinds() {
             String[] values = example("member.admin-alert.stream.");
-            assertThat(values).hasSize(7);
+            assertThat(values).hasSize(8);
             runner.withPropertyValues(values).run(ctx -> assertThat(ctx.getBean(AdminAlertStreamProperties.class)).isEqualTo(DEFAULTS));
         }
 
         @Test
-        @DisplayName("간격 · 수명 · 상한이 0 이하면 기동이 실패한다")
+        @DisplayName("간격 · 수명 · 상한이 0 이하이거나 resync 기준이 쌓기 상한 이상이면 기동이 실패한다")
         void rejectsNonPositive() {
             for (String bad : new String[] {"heartbeat=0s", "max-lifetime=-1s", "max-per-principal=0", "max-connections=0", "max-pending=0",
-                    "tail-interval=0s", "overlap=0s"}) {
+                    "resync-threshold=0", "resync-threshold=1000", "tail-interval=0s", "overlap=0s"}) {
                 runner.withPropertyValues("member.admin-alert.stream." + bad).run(ctx ->
                         assertThat(ctx).getFailure().rootCause().isInstanceOf(IllegalArgumentException.class));
             }

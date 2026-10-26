@@ -49,7 +49,7 @@
 | `status` | `firing` · `resolved` |
 | `fingerprint` | Grafana 의 경보 지문. member 는 추적에만 쓴다 |
 | `startsAt` | 사건이 시작된 시각. 초 단위 UTC(`{{ .StartsAt.UTC.Format "2006-01-02T15:04:05Z07:00" }}`). **사건의 이름이다** — 예외는 아래 "사건" |
-| `endsAt` | `resolved` 면 해소 시각. `firing` 이면 Go 의 빈 시각(`0001-01-01T00:00:00Z`) — member 는 없음으로 읽는다 |
+| `endsAt` | `resolved` 면 해소 시각(없으면 계약 위반). `firing` 이면 Go 의 빈 시각(`0001-01-01T00:00:00Z`) — member 는 없음으로 읽는다 |
 | `labels` | 규칙 라벨 전부. member 는 아래 셋만 읽는다(`alertname` · `severity` · `job` 등은 무시) |
 | `annotations` | 규칙 주석 전부. member 는 `metric_` 으로 시작하는 것만 읽는다(`summary` 등은 무시) |
 
@@ -99,8 +99,8 @@
 ## 사건
 
 - **규칙 하나 · 대상 하나에 경보 인스턴스는 하나다.** 질의를 `sum` 이나 `max by (대상)` 으로 묶어 결과 라벨에 `instance` 같은 값이 남지 않게 한다. 남으면 인스턴스마다 `startsAt` 이 달라 member 가 서로 다른 사건으로 보고 앞 사건을 닫아 버린다. 8종 모두 이 조건을 지킨다(결과 라벨은 `SERVICE_*` 에만 job 이 남는다).
-- **사건 = (type, 대상, `startsAt`).** Grafana 는 한 사건 동안 `startsAt` 을 바꾸지 않는다. 예외는 Grafana 재기동(lgtm apply 등)이다 — 그때 회복 중(Recovering)이던 경보는 새 `startsAt` 으로 온다. member 는 아래처럼 앞 사건을 닫으므로 둘이 함께 열리지는 않지만, 새 알림으로 다시 열려 읽음이 풀린다. 같은 사건의 firing 은 숫자 갱신이고, resolved 가 오면 해소다. 해소 뒤에 늦게 온 firing 은 다시 열지 않는다. firing 보다 resolved 가 먼저 오면 해소된 알림으로 바로 남긴다.
-- **새 사건이 오면** 같은 type · 대상의 열린 앞 사건을 닫는다(해소 메시지를 잃어도 열린 알림이 둘이 되지 않게). 같은 type · 대상에 더 늦게 시작한 사건이 이미 있으면 앞 사건의 늦은 메시지는 버린다.
+- **사건 = (type, 대상, `startsAt`).** Grafana 는 한 사건 동안 `startsAt` 을 바꾸지 않는다. 예외는 Grafana 재기동(lgtm apply 등)이다 — 그때 회복 중(Recovering)이던 경보는 새 `startsAt` 으로 온다. member 는 아래처럼 앞 사건을 닫으므로 둘이 함께 열리지는 않지만, 새 알림으로 다시 열려 읽음이 풀린다. 같은 사건의 firing 은 숫자 갱신이고, resolved 가 오면 해소다. 해소 뒤에 늦게 온 firing 은 다시 열지 않는다. firing 보다 resolved 가 먼저 오면 해소된 알림으로 바로 남긴다. 같은 메시지를 다시 받으면(SQS `SentTimestamp` 가 이미 반영한 시각 이하) 숫자도 재알림 판정도 건드리지 않는다.
+- **새 사건이 오면** firing 이든 resolved 든 같은 type · 대상의 열린 사건 중 **더 일찍 시작한 것만** 닫는다(해소 메시지를 잃어도 열린 알림이 둘이 되지 않게). 닫는 앞 사건은 다시 올리지 않는다 — 새 사건이 새 알림으로 올라오므로 두 번 울리지 않게 한다. 같은 type · 대상에 더 늦게 시작한 사건이 이미 있으면 앞 사건의 늦은 메시지는 버린다. 두 사건이 동시에 오면 member 가 넣은 뒤 더 늦은 사건을 잠금 읽기로 다시 보고, 있으면 늦은 메시지의 행을 지운다 — 최신 사건만 열린 채 남는다.
 
 ## 라벨을 바꿀 때 주의할 것
 
@@ -114,7 +114,7 @@
 | --- | --- |
 | `UNREADABLE` | JSON 이 아니거나 객체가 아니다 |
 | `INVALID_MESSAGE` | `version` 이 `"1"` 이 아니거나 `alerts` 가 비었다 |
-| `INVALID_ALERT` | `status` 가 firing · resolved 가 아니다, `admin_alert_type` 이 없거나 40자를 넘는다, 대상 종류가 정한 값이 아니다, 대상이 있는데 id 가 없거나 100자를 넘는다, `startsAt` 이 없거나 풀 수 없다, `endsAt` 을 풀 수 없다, 시각이 담을 수 있는 범위(1000 ~ 9999년) 밖이다, 주 숫자(★)가 소수 넷째 자리로 반올림해 ±10^16 이상이다, 숫자가 double 범위 밖이다 |
+| `INVALID_ALERT` | `alerts` 의 원소가 객체가 아니다(`null` 등), `status` 가 firing · resolved 가 아니다, `admin_alert_type` 이 없거나 40자를 넘는다, 대상 종류가 정한 값이 아니다, 대상이 있는데 id 가 없거나 100자를 넘는다, `startsAt` 이 없거나 풀 수 없다, `endsAt` 을 풀 수 없다, resolved 인데 `endsAt` 이 없다(해소 시각을 지어내지 않는다), 시각이 담을 수 있는 범위(1000 ~ 9999년) 밖이다, 주 숫자(★)가 소수 넷째 자리로 반올림해 ±10^16 이상이다, 숫자가 double 범위 밖이다 |
 
 모르는 type 은 저장하되 경고 로그를 남긴다(개발자 · 확인으로 둔다). 그래서 규칙을 member 보다 먼저 더해도 된다.
 

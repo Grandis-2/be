@@ -52,6 +52,7 @@ class AdminAlertStreams implements SmartLifecycle {
     static final String NOTIFICATION_EVENT = "notification";
     static final String UNREAD_EVENT = "unread";
     static final String REPLACED_EVENT = "replaced";
+    static final String RESYNC_EVENT = "resync";
 
     private final AdminAlertStreamProperties properties;
     private final Clock clock;
@@ -148,6 +149,14 @@ class AdminAlertStreams implements SmartLifecycle {
             }
             events.add(SseEmitter.event().name(UNREAD_EVENT).data(unread, MediaType.APPLICATION_JSON));
             connection.offer(events);
+        }
+    }
+
+    /** 대량 변경 — 모든 연결에 resync 하나와 unread 를 보낸다. 화면은 목록을 새로 읽는다. */
+    void resync(Map<Audience, AdminAlertResponse.UnreadCounts> unread) {
+        for (Connection connection : all()) {
+            connection.offer(List.of(SseEmitter.event().name(RESYNC_EVENT).data(Map.of(), MediaType.APPLICATION_JSON),
+                    SseEmitter.event().name(UNREAD_EVENT).data(unread, MediaType.APPLICATION_JSON)));
         }
     }
 

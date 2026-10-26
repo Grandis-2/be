@@ -165,6 +165,12 @@ class AdminAlertReceiversTest {
             assertReason(() -> grafana.parse(alert().with(g -> g.alert.put("startsAt", "0001-01-01T00:00:00Z")).body()),
                     Reason.INVALID_ALERT);
             assertReason(() -> grafana.parse(alert().with(g -> g.alert.put("endsAt", "곧")).body()), Reason.INVALID_ALERT);
+            assertReason(() -> grafana.parse(alert().with(g -> g.message.withArray("alerts").addNull()).body()), Reason.INVALID_ALERT);
+            assertReason(() -> grafana.parse(alert().with(g -> g.message.putArray("alerts").add(1)).body()), Reason.INVALID_ALERT);
+            assertReason(() -> grafana.parse(AdminAlertMessages.Grafana.resolved("REGISTER_FAILED", "2026-10-26T05:02:11Z",
+                    "0001-01-01T00:00:00Z").body()), Reason.INVALID_ALERT);
+            assertReason(() -> grafana.parse(AdminAlertMessages.Grafana.resolved("REGISTER_FAILED", "2026-10-26T05:02:11Z", "x")
+                    .with(g -> g.alert.remove("endsAt")).body()), Reason.INVALID_ALERT);
             assertReason(() -> grafana.parse(alert().metric("deadLetters", "1e17").body()), Reason.INVALID_ALERT);
             assertThat(grafana.parse(alert().metric("deadLetters", "1e17").with(g -> g.labels().put("admin_alert_type", "QUEUE_BRAKING"))
                     .body())).as("주 숫자가 아닌 칸은 decimal 칸에 넣지 않아 ±10^16 을 묻지 않는다 — double 범위만 본다").hasSize(1);

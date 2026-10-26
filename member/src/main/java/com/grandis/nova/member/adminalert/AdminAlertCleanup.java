@@ -14,15 +14,14 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Set;
 
 /**
  * 관리자 알림 정리(RefreshTokenCleanup 과 같은 방식). 두 가지를 한다.
  * - 보관: 해소된 지 retention(30일)이 지난 행을 지운다. 열린 알림은 기간과 상관없이 두고, 한 번 오는 소식은 발생 시각이 해소 시각이다.
  *   묶음(batchSize)씩 지울 id 를 잠그지 않고 고른 뒤 그 id 만 기본키로 지운다 — 여러 인스턴스가 겹쳐도 먼저 지운 쪽이 지우고 다른 쪽은 0행이다.
- * - 이름 다시 채우기: 받을 때 이름을 받지 못한 상품 · 회차 알림 중 refillWindow(하루) 안에 만든 것을 다시 묻는다. 한 번 실패하면 그 주기는 멈춘다
+ * - 이름 다시 채우기: 받을 때 이름을 받지 못한 상품 · 회차 알림 중 refillWindow(하루) 안에 만든 것을 대상 단위로 최근 순 refillLimit 개 골라 다시 묻는다
+ *   (같은 대상의 행이 많아도 한 자리다). 한 번 실패하면 그 주기는 멈춘다
  *   (공개 조회에 없는 대상은 건너뛴다. 상대가 내려가 있으면 나머지도 실패한다 — @Scheduled 스레드를 리프레시 정리와 나눠 쓰므로 오래 쥐지 않는다).
  *
  * 주기는 member.admin-alert.cleanup.cron(기본 10분마다, "-" 면 끈다).
@@ -38,9 +37,10 @@ class AdminAlertCleanup {
     private static final String DELETE = "DELETE FROM admin_alerts WHERE status = 'RESOLVED' AND resolved_at < ? AND id IN (%s)";
     private static final String NAMELESS = """
             SELECT target_kind, target_id FROM admin_alerts
-             WHERE target_name IS NULL AND target_kind IN ('PRODUCT', 'DRAW') AND created_at >= ? ORDER BY created_at DESC LIMIT ?""";
+             WHERE target_name IS NULL AND target_kind IN ('PRODUCT', 'DRAW') AND created_at >= ?
+             GROUP BY target_kind, target_id ORDER BY MAX(created_at) DESC LIMIT ?""";
     private static final String FILL = """
-            UPDATE admin_alerts SET target_name = ?, changed_at = ?
+            UPDATE admin_alerts SET target_name = ?, changed_at = ?, version = version + 1
              WHERE target_kind = ? AND target_id = ? AND target_name IS NULL""";
 
     /**
@@ -106,8 +106,8 @@ class AdminAlertCleanup {
     /** @return 이름을 채운 대상 수 */
     int refillNames() {
         Instant now = clock.instant();
-        Set<List<String>> targets = new LinkedHashSet<>(jdbc.query(NAMELESS, (rs, i) -> List.of(rs.getString(1), rs.getString(2)),
-                AdminAlertWriter.utc(now.minus(settings.refillWindow())), settings.refillLimit()));
+        List<List<String>> targets = jdbc.query(NAMELESS, (rs, i) -> List.of(rs.getString(1), rs.getString(2)),
+                AdminAlertWriter.utc(now.minus(settings.refillWindow())), settings.refillLimit());
         int filled = 0;
         for (List<String> target : targets) {
             TargetKind kind = TargetKind.valueOf(target.get(0));

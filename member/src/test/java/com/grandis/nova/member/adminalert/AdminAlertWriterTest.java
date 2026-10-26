@@ -8,6 +8,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.dao.CannotAcquireLockException;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.core.RowMapper;
@@ -29,6 +30,7 @@ import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
 
@@ -99,6 +101,7 @@ class AdminAlertWriterTest {
         clock.advance(Duration.ofMinutes(1));
         grafana.receive(registerFailed(startsAt, "20"));
         assertThat(only("REGISTER_FAILED").get("read_at")).as("5분이 지났지만 올린 값(20) 그대로").isNotNull();
+        clock.advance(Duration.ofSeconds(1));
         grafana.receive(registerFailed(startsAt, "22"));
         assertThat(only("REGISTER_FAILED").get("read_at")).as("5분이 지났고 늘었다").isNull();
     }
@@ -147,6 +150,85 @@ class AdminAlertWriterTest {
 
         grafana.receive(registerFailed("2026-10-26T03:00:00Z", "9"));
         assertThat(rows("REGISTER_FAILED")).hasSize(2);
+    }
+
+    @Test
+    @DisplayName("새 사건이 해소로 먼저 와도 같은 묶음의 더 이른 열린 사건을 닫는다. 더 늦은 사건은 닫지 않는다")
+    void resolvedFirstNewEpisodeClosesEarlierOnly() {
+        grafana.receive(registerFailed("2026-10-26T04:00:00Z", "3"));
+        grafana.receive(AdminAlertMessages.Grafana.resolved("REGISTER_FAILED", "2026-10-26T05:00:00Z", "2026-10-26T05:05:00Z").body());
+
+        List<Map<String, Object>> rows = rows("REGISTER_FAILED");
+        assertThat(rows).extracting(r -> r.get("episode") + "/" + r.get("status"))
+                .containsExactly("2026-10-26T04:00:00Z/RESOLVED", "2026-10-26T05:00:00Z/RESOLVED");
+        assertThat(rows.getFirst().get("resolved_at")).isEqualTo(utc(Instant.parse("2026-10-26T05:00:00Z")));
+    }
+
+    @Test
+    @DisplayName("같은 메시지를 5분 뒤 다시 받아도(같은 SentTimestamp) 숫자 · 재알림을 건드리지 않아 읽음이 풀리지 않는다")
+    void sameMessageAgainDoesNotReraise() {
+        String startsAt = "2026-10-26T05:00:00Z";
+        Instant sent = T0.plusSeconds(10);
+        grafana.receive(registerFailed(startsAt, "10"), T0);
+        clock.advance(Duration.ofSeconds(10));
+        grafana.receive(registerFailed(startsAt, "11"), sent);
+        markAllRead();
+
+        clock.advance(Duration.ofMinutes(6));
+        grafana.receive(registerFailed(startsAt, "11"), sent);
+
+        Map<String, Object> row = only("REGISTER_FAILED");
+        assertThat(row.get("read_at")).as("5분이 지나 늘어난 값으로 보이지만 같은 메시지다").isNotNull();
+        assertThat(row.get("last_updated_at")).isEqualTo(utc(sent));
+    }
+
+    @Test
+    @DisplayName("경합 3 — 오래된 사건이 확인을 마친 뒤 최신 사건이 들어와 커밋되면, 오래된 사건은 최신 사건을 닫지 않고 자기 행을 지운다")
+    void olderEpisodeAfterNewerCommitIsDropped() {
+        AdminAlertWriter plain = new AdminAlertWriter(jdbc, JSON, clock);
+        AdminAlertSignal newer = grafana.parse(registerFailed("2026-10-26T05:00:00Z", "4")).getFirst();
+        AdminAlertSignal older = grafana.parse(registerFailed("2026-10-26T04:00:00Z", "3")).getFirst();
+        AtomicBoolean once = new AtomicBoolean();
+        // 오래된 사건의 첫 확인(더 늦은 사건 없음)이 끝난 직후에 최신 사건을 다른 트랜잭션으로 넣고 커밋한다
+        AdminAlertWriter olderWriter = new AdminAlertWriter(new HookedJdbc(jdbc,
+                sql -> sql.contains("first_occurred_at > ?") && !sql.contains("FOR SHARE"), null, () -> {
+                    if (once.compareAndSet(false, true)) {
+                        runInOtherTransaction(() -> plain.apply(newer, null));
+                    }
+                }), JSON, clock);
+
+        Outcome outcome = transactions.execute(tx -> olderWriter.apply(older, null));
+
+        assertThat(outcome).isEqualTo(Outcome.IGNORED);
+        assertThat(rows("REGISTER_FAILED")).extracting(r -> r.get("episode") + "/" + r.get("status"))
+                .containsExactly("2026-10-26T05:00:00Z/OPEN");
+    }
+
+    @Test
+    @DisplayName("경합 4 — 최신 사건이 넣고 커밋하기 전에 오래된 사건이 오면, 오래된 사건의 잠금 재확인이 그 커밋을 기다렸다가 자기 행을 지운다")
+    void olderEpisodeWaitsForUncommittedNewer() throws Exception {
+        AdminAlertWriter writer = new AdminAlertWriter(jdbc, JSON, clock);
+        AdminAlertSignal newer = grafana.parse(registerFailed("2026-10-26T05:00:00Z", "4")).getFirst();
+        AdminAlertSignal older = grafana.parse(registerFailed("2026-10-26T04:00:00Z", "3")).getFirst();
+        CountDownLatch newerApplied = new CountDownLatch(1);
+        CountDownLatch commitNewer = new CountDownLatch(1);
+
+        Thread newerThread = Thread.ofPlatform().start(() -> transactions.executeWithoutResult(tx -> {
+            writer.apply(newer, null);
+            newerApplied.countDown();
+            awaitLatch(commitNewer);
+        }));
+        awaitLatch(newerApplied);
+        AtomicReference<Outcome> olderOutcome = new AtomicReference<>();
+        Thread olderThread = Thread.ofPlatform().start(() -> olderOutcome.set(transactions.execute(tx -> writer.apply(older, null))));
+        Thread.sleep(500);   // 오래된 사건이 넣고 잠금 재확인에서 최신 사건의 커밋을 기다리는 동안
+        commitNewer.countDown();
+        newerThread.join(10_000);
+        olderThread.join(10_000);
+
+        assertThat(olderOutcome.get()).isEqualTo(Outcome.IGNORED);
+        assertThat(rows("REGISTER_FAILED")).extracting(r -> r.get("episode") + "/" + r.get("status"))
+                .containsExactly("2026-10-26T05:00:00Z/OPEN");
     }
 
     @Test
@@ -243,7 +325,7 @@ class AdminAlertWriterTest {
     }
 
     @Test
-    @DisplayName("두 소비자가 같은 새 사건을 동시에 넣으면(둘 다 없음을 읽은 뒤) 한쪽만 넣고 진 쪽은 중복 키로 끝난다 — 다시 받으면 갱신으로 지난다")
+    @DisplayName("두 소비자가 같은 새 사건을 동시에 넣으면(둘 다 없음을 읽은 뒤) 한쪽만 넣고 진 쪽은 일시 오류(중복 키 · 교착)로 끝난다 — 다시 받으면 그대로 지난다")
     void concurrentInsert() throws Exception {
         AdminAlertSignal signal = grafana.parse(registerFailed("2026-10-26T05:00:00Z", "1")).getFirst();
         // 둘 다 잠금 읽기(없음)를 마친 뒤에 넣게 맞춘다 — 그래야 진 쪽이 반드시 생긴다
@@ -256,11 +338,12 @@ class AdminAlertWriterTest {
         assertThat(rows("REGISTER_FAILED")).hasSize(1);
         assertThat(results).filteredOn(Concurrently.Outcome::succeeded).singleElement()
                 .extracting(Concurrently.Outcome::value).isEqualTo(Outcome.CREATED);
+        // 진 쪽은 중복 키로 끝나거나, 이긴 쪽의 앞 사건 닫기 · 잠금 재확인과 엇갈려 교착(1213)으로 끝난다 — 둘 다 일시 오류라 다시 받는다
         assertThat(results).filteredOn(r -> !r.succeeded()).singleElement()
-                .satisfies(r -> assertThat(r.error()).isInstanceOf(DuplicateKeyException.class));
+                .satisfies(r -> assertThat(r.error()).isInstanceOfAny(DuplicateKeyException.class, CannotAcquireLockException.class));
         AdminAlertWriter plain = new AdminAlertWriter(jdbc, JSON, clock);
         Outcome again = transactions.execute(tx -> plain.apply(signal, null));
-        assertThat(again).isEqualTo(Outcome.UPDATED);
+        assertThat(again).as("다시 받으면 이미 반영한 같은 메시지라 그대로 지난다").isEqualTo(Outcome.IGNORED);
     }
 
     @Test
@@ -370,6 +453,17 @@ class AdminAlertWriterTest {
 
     private static LocalDateTime utc(Instant instant) {
         return LocalDateTime.ofInstant(instant, ZoneOffset.UTC);
+    }
+
+    /** 다른 스레드 · 다른 트랜잭션에서 돌리고 끝날 때까지 기다린다. */
+    private void runInOtherTransaction(Runnable work) {
+        Thread other = Thread.ofPlatform().start(() -> transactions.executeWithoutResult(tx -> work.run()));
+        try {
+            other.join(10_000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IllegalStateException(e);
+        }
     }
 
     private static void awaitLatch(CountDownLatch latch) {

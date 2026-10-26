@@ -15,6 +15,8 @@
 -- raised_value: 올릴 때의 주 숫자. 재알림(2배 · 100 단위 · 5분 뒤 증가)을 이 값과 견준다.
 -- read_at: 읽은 시각(전역 하나 — 관리자 계정이 하나다). NULL 이면 안 읽음이다.
 -- changed_at: 어떤 칸이든 바꾼 시각. 실시간 연결이 이 시각으로 바뀐 행을 찾는다.
+-- version: 행을 바꿀 때마다 1씩 오른다(넣을 때 0). 실시간 연결이 이미 보낸 변경인지 (id, version) 으로 가른다 — 같은 마이크로초에 두 번 바뀌어도
+--   두 번째 변경을 놓치지 않는다.
 -- metrics: 마지막으로 받은 값. 칸 이름은 type 마다 계약 문서가 정한다.
 -- last_event_id: 마지막으로 반영한 이벤트의 eventId(추적용, Grafana 경로는 NULL). 형 · 콜레이션은 아웃박스 event_id 와 같다.
 --
@@ -47,6 +49,7 @@ CREATE TABLE shop.admin_alerts (
     resolved_at       datetime(6)   NULL,
     read_at           datetime(6)   NULL,
     changed_at        datetime(6)   NOT NULL,
+    version           bigint        NOT NULL,
     last_event_id     char(36)      COLLATE utf8mb4_bin NULL,
     created_at        datetime(6)   NOT NULL,
     PRIMARY KEY (id),

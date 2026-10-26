@@ -35,8 +35,10 @@ import java.util.UUID;
  *
  * 순서가 뒤바뀐 메시지는 이렇게 거른다.
  * - 이미 해소된 사건에 늦게 온 firing · 중복 소식: 그대로 둔다.
- * - 같은 묶음에 더 늦게 시작한 사건이 이미 있는 Grafana 경보: 넣지 않는다. 새 사건을 넣을 때는 같은 묶음의 열린 앞 사건을 닫는다
- *   (해소 메시지를 잃어도 열린 알림이 둘이 되지 않게).
+ * - 같은 묶음에 더 늦게 시작한 사건이 이미 있는 Grafana 경보: 넣지 않는다. 새 사건을 넣을 때는 상태(firing · resolved)와 상관없이 같은 묶음의
+ *   더 이른 열린 사건만 닫는다(해소 메시지를 잃어도 열린 알림이 둘이 되지 않게). 넣은 뒤 더 늦은 사건을 잠금 읽기로 다시 보고, 있으면 방금 넣은 행을
+ *   지운다 — 오래된 사건의 확인과 넣기 사이에 최신 사건이 들어와도 최신 사건이 열린 채 남는다.
+ * - 이미 반영한 시각(last_updated_at) 이하의 소식: 같은 메시지를 다시 받은 것이라 값 · 재알림 판정을 건드리지 않는다.
  * - 같은 회차의 DRAW_SETTLED 가 이미 있는 DRAW_DELAYED: 넣지 않는다(order 는 반영을 커밋한 뒤 DELAYED 를 적지 않는다).
  *
  * 해소 메시지의 빈 값(null)은 마지막 firing 의 숫자를 지우지 않는다 — 해소 문구에 그 숫자가 들어간다.
@@ -44,7 +46,7 @@ import java.util.UUID;
  * 격리 수준은 READ COMMITTED 여야 한다(TransactionIsolationVerifier 가 기동 때 확인한다). 없는 행을 잠금 읽기로 확인한 뒤 넣는 절차가 REPEATABLE READ
  * 에서는 갭 잠금으로 교착한다. 그 대신 RC 의 잠금 없는 읽기는 다른 트랜잭션의 미커밋 행을 보지 못한다 — DRAW_DELAYED 와 DRAW_SETTLED 가 동시에 오면
  * SETTLED 의 해소(UPDATE)가 아직 없는 DELAYED 를 지나치고, DELAYED 의 확인도 미커밋 SETTLED 를 지나쳐 DELAYED 가 열린 채 남을 수 있다. 그래서 DELAYED 를
- * 넣은 뒤 SETTLED 를 잠금 읽기(FOR SHARE)로 다시 본다 — SETTLED 가 커밋 전이면 그 커밋을 기다렸다가 보고, 있으면 그 자리에서 해소한다. 둘 다 서로의 행을
+ * 넣은 뒤 SETTLED 를 잠금 읽기(FOR SHARE)로 다시 본다(같은 묶음의 Grafana 사건끼리도 같은 방식이다) — SETTLED 가 커밋 전이면 그 커밋을 기다렸다가 보고, 있으면 그 자리에서 해소한다. 둘 다 서로의 행을
  * 먼저 넣은 드문 순서에서는 교착(1213)으로 한쪽이 되돌려지고, 그 쪽은 일시 오류로 다시 받아 끝난다.
  */
 @Component
@@ -62,32 +64,35 @@ class AdminAlertWriter {
     private static final String LATER_EPISODE = """
             SELECT COUNT(*) FROM admin_alerts
              WHERE type = ? AND target_kind = ? AND target_id = ? AND audience = ? AND first_occurred_at > ?""";
+    private static final String LATER_EPISODE_LOCKED = LATER_EPISODE + " FOR SHARE";
+    private static final String DELETE_OWN = "DELETE FROM admin_alerts WHERE id = ?";
     private static final String SETTLED = """
             SELECT MIN(first_occurred_at) FROM admin_alerts WHERE type = 'DRAW_SETTLED' AND target_kind = 'DRAW' AND target_id = ?""";
     private static final String SETTLED_LOCKED = SETTLED + " FOR SHARE";
     private static final String INSERT = """
             INSERT INTO admin_alerts (id, type, audience, target_kind, target_id, target_name, episode, source, severity, status,
                                       metrics, first_occurred_at, last_updated_at, raised_at, raised_value, resolved_at, read_at,
-                                      changed_at, last_event_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)""";
+                                      changed_at, version, last_event_id, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, 0, ?, ?)""";
     private static final String CLOSE_EARLIER = """
-            UPDATE admin_alerts SET status = 'RESOLVED', resolved_at = ?, changed_at = ?
-             WHERE type = ? AND audience = ? AND target_kind = ? AND target_id = ? AND status = 'OPEN' AND id <> ?""";
+            UPDATE admin_alerts SET status = 'RESOLVED', resolved_at = ?, changed_at = ?, version = version + 1
+             WHERE type = ? AND audience = ? AND target_kind = ? AND target_id = ? AND status = 'OPEN' AND id <> ?
+               AND first_occurred_at < ?""";
     private static final String UPDATE = """
             UPDATE admin_alerts SET metrics = ?, last_updated_at = ?, severity = ?, last_event_id = COALESCE(?, last_event_id),
-                                    changed_at = ?
+                                    changed_at = ?, version = version + 1
              WHERE id = ?""";
     private static final String RAISE = """
             UPDATE admin_alerts SET metrics = ?, last_updated_at = ?, severity = ?, last_event_id = COALESCE(?, last_event_id),
-                                    raised_at = ?, raised_value = ?, read_at = NULL, changed_at = ?
+                                    raised_at = ?, raised_value = ?, read_at = NULL, changed_at = ?, version = version + 1
              WHERE id = ?""";
     private static final String RESOLVE = """
             UPDATE admin_alerts SET status = 'RESOLVED', resolved_at = ?, metrics = ?, last_updated_at = ?,
-                                    raised_at = ?, read_at = NULL, changed_at = ?
+                                    raised_at = ?, read_at = NULL, changed_at = ?, version = version + 1
              WHERE id = ?""";
     private static final String RESOLVE_DELAYED = """
             UPDATE admin_alerts SET status = 'RESOLVED', resolved_at = ?, last_updated_at = ?, raised_at = ?, read_at = NULL,
-                                    changed_at = ?
+                                    changed_at = ?, version = version + 1
              WHERE type = 'DRAW_DELAYED' AND target_kind = 'DRAW' AND target_id = ? AND status = 'OPEN'""";
 
     private final JdbcTemplate jdbc;
@@ -174,9 +179,16 @@ class AdminAlertWriter {
                 targetName, signal.episode(), signal.source().name(), rule.severity().name(), status.name(),
                 json(signal.metrics()), utc(occurredAt), utc(seenAt), utc(now), scaled(primary(rule, signal)), utc(resolvedAt),
                 utc(now), signal.eventId(), utc(now));
-        if (status == Status.OPEN) {
+        if (signal.source() == Source.GRAFANA) {
+            // 새 사건은 해소로 먼저 왔어도 같은 묶음의 더 이른 열린 사건을 닫는다. 더 늦은 사건은 건드리지 않는다
             jdbc.update(CLOSE_EARLIER, utc(occurredAt), utc(now), signal.type(), audience.name(), signal.targetKind().name(),
-                    signal.targetId(), UuidBinary.toBytes(id));
+                    signal.targetId(), UuidBinary.toBytes(id), utc(occurredAt));
+            // 첫 확인 뒤에 더 늦은 사건이 들어왔으면(커밋 전이면 잠금 읽기로 기다린다) 그것이 최신이다 — 방금 넣은 이 늦은 메시지는 지운다
+            if (count(LATER_EPISODE_LOCKED, signal.type(), signal.targetKind().name(), signal.targetId(), audience.name(),
+                    utc(occurredAt)) > 0) {
+                jdbc.update(DELETE_OWN, (Object) UuidBinary.toBytes(id));
+                return Outcome.IGNORED;
+            }
         }
         return status == Status.OPEN ? Outcome.CREATED : Outcome.RESOLVED;
     }
@@ -184,7 +196,8 @@ class AdminAlertWriter {
     /** 열린 행의 숫자를 갱신한다. 늦게 온 소식은 숫자를 덮지 않는다. 승격하거나 주 숫자가 늘었으면 다시 올린다. */
     private Outcome update(AdminAlertSignal signal, Rule rule, Current current, Instant now) {
         Instant seenAt = micros(signal.seenAt());
-        if (seenAt.isBefore(current.lastUpdatedAt())) {
+        // 이미 반영한 시각 이하면 같은 메시지를 다시 받은 것이다 — 값도 재알림 판정도 건드리지 않는다(재수신이 늦어진 것만으로 다시 울리지 않게)
+        if (!seenAt.isAfter(current.lastUpdatedAt())) {
             return Outcome.IGNORED;
         }
         boolean escalate = rule.escalateAfter() != null && current.severity() != Severity.URGENT

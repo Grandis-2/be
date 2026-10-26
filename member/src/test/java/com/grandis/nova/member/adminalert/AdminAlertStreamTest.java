@@ -22,7 +22,10 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
+import com.grandis.nova.common.UuidBinary;
 import java.time.Instant;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -60,6 +63,7 @@ class AdminAlertStreamTest {
     @Autowired GrafanaAlertReceiver grafana;
     @MockitoSpyBean AdminAlertStreams streams;
     @Autowired JdbcTemplate jdbc;
+    @Autowired AdminAlertService service;
 
     final List<SseClient> clients = new ArrayList<>();
 
@@ -115,6 +119,33 @@ class AdminAlertStreamTest {
         assertThat(notification(developer).get("audience").asString()).isEqualTo("DEVELOPER");
         assertThat(developer.nextEvent(WAIT).name()).isEqualTo("unread");
         assertThat(developer.nextEvent(Duration.ofSeconds(1))).as("같은 변경은 다시 오지 않는다").isNull();
+    }
+
+    @Test
+    @DisplayName("안 읽은 알림 1,001건을 모두 읽음으로 바꿔도 연결이 닫히지 않는다 — 행마다 보내지 않고 resync 하나와 unread 가 온다")
+    void readAllOfManyIsOneResync() throws Exception {
+        LocalDateTime old = LocalDateTime.ofInstant(Instant.now().minusSeconds(3600), ZoneOffset.UTC);
+        List<Object[]> rows = new ArrayList<>();
+        for (int i = 0; i < 1001; i++) {
+            rows.add(new Object[] {UuidBinary.toBytes(UUID.randomUUID()), "2026-10-26T05:00:" + i, old, old, old, old, old});
+        }
+        jdbc.batchUpdate("""
+                INSERT INTO admin_alerts (id, type, audience, target_kind, target_id, episode, source, severity, status, metrics,
+                                          first_occurred_at, last_updated_at, raised_at, changed_at, version, created_at)
+                VALUES (?, 'SHIPPING_BACKLOG', 'ADMIN', 'NONE', '', ?, 'GRAFANA', 'INFO', 'RESOLVED', '{}', ?, ?, ?, ?, 0, ?)""", rows);
+        SseClient client = open("admin", PATH);
+        SseClient.Event first = client.nextEvent(WAIT);
+        assertThat(first.name()).isEqualTo("unread");
+        assertThat(JSON.readTree(first.data()).get("ADMIN").get("info").asLong()).isEqualTo(1001);
+
+        service.markAllRead(null);
+
+        assertThat(client.nextEvent(WAIT).name()).isEqualTo("resync");
+        SseClient.Event unread = client.nextEvent(WAIT);
+        assertThat(unread.name()).isEqualTo("unread");
+        assertThat(JSON.readTree(unread.data()).get("ADMIN").get("info").asLong()).isZero();
+        assertThat(client.next(WAIT)).as("연결은 그대로 — 주기 신호가 온다").isNotEqualTo(SseClient.END).isNotNull();
+        assertThat(streams.size()).isEqualTo(1);
     }
 
     @Test
