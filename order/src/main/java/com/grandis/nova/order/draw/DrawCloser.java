@@ -57,7 +57,7 @@ public class DrawCloser {
      * 머문다. 저절로 풀리지 않을 수 있어 사람이 본다. 경보는 마감 뒤 {@link #ALARM_UNTIL} 까지만 낸다 — 그 뒤로는 관리자 진행 조회로 본다(같은
      * 회차가 끝없이 경보를 채우지 않게).
      *
-     * 리더를 두지 않아 인스턴스마다 알린다 — 허브가 같은 회차의 지연 알림을 한 건으로 묶는다. 한 회차의 실패는 그 회차만 건너뛴다.
+     * 리더를 두지 않아 인스턴스마다 알린다 — member 가 같은 회차의 지연 알림을 한 건으로 묶는다. 한 회차의 실패는 그 회차만 건너뛴다.
      */
     @Scheduled(fixedDelayString = "${nova.draw.stall-check-interval:10m}", initialDelayString = "${nova.draw.stall-check-interval:10m}")
     void checkStalled() {

@@ -394,7 +394,7 @@ class DrawSettlementTest {
         assertThat(adminAlerts(old)).isEmpty();
 
         closer.checkStalled();
-        assertThat(adminAlerts(authorizing)).as("검사마다 다시 보낸다 — 허브가 묶는다").hasSize(2);
+        assertThat(adminAlerts(authorizing)).as("검사마다 다시 보낸다 — member 가 묶는다").hasSize(2);
     }
 
     /** 고른 뒤 잠그기 전에 반영이 커밋된 회차 — 잠근 뒤 반영 표식을 다시 보고 보내지 않는다. */
@@ -411,7 +411,7 @@ class DrawSettlementTest {
 
     /**
      * 반영이 회차를 잠근 동안 검사는 기다리지 않고 그 회차를 건너뛴다 — 스케줄러 스레드가 남의 잠금에 묶이지 않는다. 반영이 커밋된 뒤의 검사는
-     * 반영 표식을 보고 보내지 않는다. 그 사이에 지연 알림을 적었다면 반영 알림보다 늦게 찍혀 허브가 해소한 알림을 다시 연다.
+     * 반영 표식을 보고 보내지 않는다. 그 사이에 지연 알림을 적었다면 반영 알림보다 늦게 찍혀 member 가 해소한 알림을 다시 연다.
      */
     @Test
     @DisplayName("반영이 진행 중인 회차는 기다리지 않고 건너뛰고, 반영된 뒤에도 DRAW_DELAYED 를 보내지 않는다")

@@ -7,8 +7,8 @@ import java.util.Objects;
 import java.util.UUID;
 
 /**
- * 관리자 알림 한 건(contracts/admin-alert-events.md). 허브가 받아 묶음 · 해소 규칙대로 저장한다. 보내는 쪽은 사실만 싣는다 — 받는 사람 ·
- * 심각도 · 문구 · 상품이나 회차 이름은 허브와 프론트가 정한다.
+ * 관리자 알림 한 건(contracts/admin-alert-events.md). member 가 받아 묶음 · 해소 규칙대로 저장한다. 보내는 쪽은 사실만 싣는다 — 받는 사람 ·
+ * 심각도 · 문구 · 상품이나 회차 이름은 member 와 프론트가 정한다.
  *
  * 종류마다 metrics 칸이 다르다. 종류와 칸이 어긋나지 않게 정적 팩토리로 만든다. 없는 값은 칸을 빼지 않고 null 로 싣는다(계약).
  *
@@ -31,7 +31,7 @@ public record AdminAlertRequested(@JsonIgnore UUID aggregateId, Type type, Targe
                 new DrawSettledMetrics(winners, winnerCount, closesAt, settledAt));
     }
 
-    /** 마감 뒤 오래 반영하지 못한 회차 — 찾을 때마다(같은 회차에 여러 번 와도 허브가 묶는다). */
+    /** 마감 뒤 오래 반영하지 못한 회차 — 찾을 때마다(같은 회차에 여러 번 와도 member 가 묶는다). */
     public static AdminAlertRequested drawDelayed(UUID drawId, Instant closesAt, Instant drawRequestedAt, long authorizingEntries,
                                                   long paidEntries) {
         return new AdminAlertRequested(drawId, Type.DRAW_DELAYED, Target.draw(drawId),

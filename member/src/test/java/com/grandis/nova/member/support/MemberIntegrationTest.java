@@ -44,8 +44,9 @@ import org.springframework.core.annotation.AliasFor;
         // 기본값(60s)으로는 Redis 가 죽은 갈래가 시험을 멈춰 세운다. 예시 설정과 같은 값으로 빨리 실패시킨다.
         "spring.data.redis.timeout=300ms",
         "spring.data.redis.connect-timeout=200ms",
-        // 주기 정리는 끈다 — 시험이 넣은 만료 행을 도중에 지워 결과가 흔들리지 않게. 정리 시험은 run() 을 직접 부른다
+        // 주기 정리는 끈다 — 시험이 넣은 만료 행을 도중에 지워 결과가 흔들리지 않게. 정리 시험은 정리 메서드를 직접 부른다
         "member.refresh-cleanup.cron=-",
+        "member.admin-alert.cleanup.cron=-",
         // 관리자 로그인 합계 제한은 시험끼리 공유하는 키 하나라, 기본값(60)이면 여러 시험의 시도가 쌓여 엉뚱한 곳에서 429 가 난다.
         // 합계 시험은 이 한도 바로 아래로 키를 심어 확인한다(AdminLoginThrottleTest)
         "auth.admin-login-limit.max-total-attempts=100000"

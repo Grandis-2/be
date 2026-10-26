@@ -21,6 +21,14 @@ spring:
         jdbc:
           time_zone: UTC
     open-in-view: false
+  # 관리자 알림 대상 이름 — catalog 상품 상세 · order 회차 상세(공개 조회, 토큰 없음). 시간 제한은 코드 기본값(연결 300ms · 읽기 1s, MemberDefaults).
+  # 주소가 없거나 답이 없으면 이름만 비우고 알림은 저장한다. 배포 환경의 주소는 인프라 calls 가 넣는다
+  http:
+    serviceclient:
+      catalog:
+        base-url: http://localhost:8082
+      order:
+        base-url: http://localhost:8084
   data:
     redis:
       host: localhost
@@ -98,6 +106,38 @@ member:
       max-connections: 5000
       tail-interval: 2s
       overlap: 10s
+  # 관리자 알림(contracts/admin-alert-hub.md). 아래가 코드 기본값이라 운영에는 적지 않는다. 소비기는 nova.sqs.consumer.enabled 로 함께 켜진다.
+  admin-alert:
+    consumer:
+      event-queue: admin-alert             # preorder · order 의 ADMIN_ALERT_REQUESTED
+      grafana-queue: admin-alert-grafana   # Grafana → SNS(원문 전달) → SQS
+      concurrency: 1
+      wait-seconds: 20
+      # 받은 묶음을 차례로 처리하므로 가시성은 한 묶음의 처리 시간보다 길어야 한다. DB 가 끊기면 건마다 Hikari 연결 대기(30초)가 걸려
+      # 5건 × 30초 = 2분 30초다 — 그래서 5건 · 3분(운영 notification 과 같은 값)
+      max-messages: 5
+      visibility: 3m
+      backoff-base: 30s
+      backoff-max: 5m
+    # 실시간 연결(GET /api/v1/admin/notifications/stream). 뜻은 위 notification.stream 과 같다. max-per-principal 은 한 관리자 계정(토큰 sub)이
+    # 이 인스턴스에 여는 연결 수 — 넘으면 가장 오래된 연결을 닫는다. max-pending 은 연결 하나가 쓰지 못하고 쌓아 둘 사건 수 — 넘으면 닫고 화면은 다시
+    # 연결해 목록을 새로 읽는다
+    stream:
+      heartbeat: 25s
+      max-lifetime: 30m
+      max-per-principal: 20
+      max-connections: 100
+      max-pending: 1000
+      tail-interval: 2s
+      overlap: 10s
+    # 해소 뒤 30일 지난 알림을 지우고, 받을 때 이름을 받지 못한 상품 · 회차 알림(하루 안)의 이름을 다시 묻는다. cron 을 "-" 로 두면 끈다
+    cleanup:
+      cron: "0 */10 * * * *"
+      retention: 30d
+      batch-size: 500
+      max-batches-per-run: 20
+      refill-window: 1d
+      refill-limit: 20
 
 auth:
   # 관리자 로그인 시도 제한(IP 별). 창 안에서 max-attempts 를 넘으면 bcrypt 비교 없이 429 + Retry-After. 성공하면 그 IP 의 수를 지운다.
