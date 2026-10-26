@@ -9,6 +9,8 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.time.Clock;
+import java.util.Collection;
 import java.time.Instant;
 import java.util.EnumMap;
 import java.util.List;
@@ -110,22 +112,39 @@ class AdminAlertQueries {
                 new MapSqlParameterSource("now", AdminAlertWriter.utc(now)).addValue("id", UuidBinary.toBytes(id)));
     }
 
+    /** 이 트랜잭션이 바꾼 행만 changed_at 을 지금으로 다시 찍는다(AdminAlertWriter.restamp). */
+    void restamp(Collection<UUID> ids, Clock clock) {
+        AdminAlertWriter.restamp(jdbc.getJdbcOperations(), ids, clock);
+    }
+
     boolean exists(UUID id) {
         Long count = jdbc.queryForObject("SELECT COUNT(*) FROM admin_alerts WHERE id = :id",
                 new MapSqlParameterSource("id", UuidBinary.toBytes(id)), Long.class);
         return count != null && count > 0;
     }
 
-    /** @param audience null 이면 둘 다 */
-    int markAllRead(Audience audience, Instant now) {
-        MapSqlParameterSource params = new MapSqlParameterSource("now", AdminAlertWriter.utc(now));
-        // 바뀐 행이 많으면 꼬리 읽기가 행마다 보내지 않고 resync 하나로 알린다(AdminAlertTail)
-        String sql = "UPDATE admin_alerts SET read_at = :now, changed_at = :now, version = version + 1 WHERE read_at IS NULL";
+    /**
+     * 안 읽은 행을 잠금 읽기로 골라 그 id 만 읽음으로 바꾼다 — 바꾼 행을 정확히 알아야 다시 찍기가 남의 행을 건드리지 않는다. 바뀐 행이 많으면 꼬리 읽기가
+     * 행마다 보내지 않고 resync 하나로 알린다(AdminAlertTail).
+     *
+     * @param audience null 이면 둘 다
+     * @return 읽음으로 바꾼 행
+     */
+    List<UUID> markAllRead(Audience audience, Instant now) {
+        MapSqlParameterSource params = new MapSqlParameterSource();
+        String select = "SELECT id FROM admin_alerts WHERE read_at IS NULL";
         if (audience != null) {
-            sql += " AND audience = :audience";
+            select += " AND audience = :audience";
             params.addValue("audience", audience.name());
         }
-        return jdbc.update(sql, params);
+        List<UUID> ids = jdbc.query(select + " FOR UPDATE", params, (rs, i) -> UuidBinary.fromBytes(rs.getBytes(1)));
+        for (int from = 0; from < ids.size(); from += AdminAlertWriter.ID_CHUNK) {
+            List<byte[]> chunk = ids.subList(from, Math.min(from + AdminAlertWriter.ID_CHUNK, ids.size())).stream()
+                    .map(UuidBinary::toBytes).toList();
+            jdbc.update("UPDATE admin_alerts SET read_at = :now, changed_at = :now, version = version + 1 WHERE id IN (:ids)",
+                    new MapSqlParameterSource("now", AdminAlertWriter.utc(now)).addValue("ids", chunk));
+        }
+        return ids;
     }
 
     private static final RowMapper<View> VIEW = (rs, row) -> new View(UuidBinary.fromBytes(rs.getBytes("id")), rs.getString("type"),
