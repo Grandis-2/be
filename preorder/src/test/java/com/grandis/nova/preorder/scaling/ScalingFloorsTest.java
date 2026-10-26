@@ -24,12 +24,27 @@ class ScalingFloorsTest {
     void 대기열은_가장_큰_예상_방문자_수로_preorder_는_고정_대수() {
         assertThat(of(new ScalingDemand(3, 20_000)))
                 .isEqualTo(new ScalingFloors(3, 4, false));
-        assertThat(of(new ScalingDemand(1, 5_001))).isEqualTo(new ScalingFloors(3, 2, false));
+        assertThat(of(new ScalingDemand(1, 15_001))).isEqualTo(new ScalingFloors(3, 4, false));
     }
 
     @Test
-    void 예상_방문자_수를_넣은_회차가_없으면_대기열은_평소대로() {
-        assertThat(of(new ScalingDemand(2, null))).isEqualTo(new ScalingFloors(3, 1, false));
+    void 예상_방문자_수가_없거나_적어도_대기열은_surge_까지_올린다() {
+        assertThat(of(new ScalingDemand(2, null))).isEqualTo(new ScalingFloors(3, 3, false));
+        assertThat(of(new ScalingDemand(1, 5_001))).isEqualTo(new ScalingFloors(3, 3, false));
+    }
+
+    /** surge 를 넣지 않은 채 평소 대수만 올린 환경도 뜨고, 회차가 열려도 평소 아래로 내리지 않는다. */
+    @Test
+    void 대기열_평소_대수가_surge_보다_크면_평소_대수() {
+        ScalingProperties properties = new ScalingProperties(false, Duration.ofMinutes(1), "ap-northeast-2", "",
+                Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofMinutes(1),
+                new ScalingProperties.Waitingroom("nova-prod-waitingroom", 4, 10, 5000, 3),
+                new ScalingProperties.Preorder("nova-prod-preorder", 1, 5, 3));
+
+        assertThat(ScalingFloors.of(new ScalingDemand(1, null), OptionalLong.empty(), ACCEPT_PER_SECOND, properties))
+                .isEqualTo(new ScalingFloors(3, 4, false));
+        assertThat(ScalingFloors.of(new ScalingDemand(1, 5_001), OptionalLong.empty(), ACCEPT_PER_SECOND, properties))
+                .isEqualTo(new ScalingFloors(3, 4, false));
     }
 
     @Test
@@ -47,15 +62,15 @@ class ScalingFloorsTest {
     /** 입장 속도는 살아 있는 preorder 용량의 합에 묶이므로, 관리자 값을 받을 대수(올림)까지 올린다. */
     @Test
     void 회차가_있으면_관리자_입장_속도를_받을_대수와_surge_중_큰_값() {
-        assertThat(of(new ScalingDemand(1, null), 250)).isEqualTo(new ScalingFloors(3, 1, false));
-        assertThat(of(new ScalingDemand(1, null), 401)).isEqualTo(new ScalingFloors(5, 1, false));
-        assertThat(of(new ScalingDemand(1, null), 0)).isEqualTo(new ScalingFloors(3, 1, false));
+        assertThat(of(new ScalingDemand(1, null), 250)).isEqualTo(new ScalingFloors(3, 3, false));
+        assertThat(of(new ScalingDemand(1, null), 401)).isEqualTo(new ScalingFloors(5, 3, false));
+        assertThat(of(new ScalingDemand(1, null), 0)).isEqualTo(new ScalingFloors(3, 3, false));
     }
 
     @Test
     void 관리자_입장_속도가_최대_대수를_넘으면_최대로_자르고_알린다() {
-        assertThat(of(new ScalingDemand(1, null), 1_000)).isEqualTo(new ScalingFloors(5, 1, true));
-        assertThat(of(new ScalingDemand(1, null), Long.MAX_VALUE)).isEqualTo(new ScalingFloors(5, 1, true));
+        assertThat(of(new ScalingDemand(1, null), 1_000)).isEqualTo(new ScalingFloors(5, 3, true));
+        assertThat(of(new ScalingDemand(1, null), Long.MAX_VALUE)).isEqualTo(new ScalingFloors(5, 3, true));
     }
 
     /** 클러스터 · 서비스 이름은 환경마다 달라(운영은 nova-prod-*) 기본값이 없다. */
@@ -64,17 +79,19 @@ class ScalingFloorsTest {
         assertThatThrownBy(() -> properties(true, " ", 10)).isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new ScalingProperties(true, Duration.ofMinutes(1), "ap-northeast-2", "nova-prod",
                 Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofMinutes(1),
-                new ScalingProperties.Waitingroom("", 1, 10, 5000),
+                new ScalingProperties.Waitingroom("", 1, 10, 5000, 3),
                 new ScalingProperties.Preorder("nova-prod-preorder", 1, 5, 3)))
                 .isInstanceOf(IllegalArgumentException.class);
         assertThat(properties(true, "nova-prod", 10).enabled()).isTrue();
     }
 
     @Test
-    void preorder_의_고정_대수는_평소_이상_최대_이하() {
+    void 고정_대수는_평소_이상_최대_이하() {
         assertThatThrownBy(() -> new ScalingProperties.Preorder("preorder", 2, 5, 1))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new ScalingProperties.Waitingroom("waitingroom", 3, 2, 5000))
+        assertThatThrownBy(() -> new ScalingProperties.Waitingroom("waitingroom", 3, 2, 5000, 3))
+                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> new ScalingProperties.Waitingroom("waitingroom", 0, 5, 5000, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
@@ -89,7 +106,7 @@ class ScalingFloorsTest {
     private static ScalingProperties properties(boolean enabled, String cluster, int waitingroomMax) {
         return new ScalingProperties(enabled, Duration.ofMinutes(1), "ap-northeast-2", cluster, Duration.ofMinutes(15),
                 Duration.ofMinutes(30), Duration.ofMinutes(1),
-                new ScalingProperties.Waitingroom("nova-prod-waitingroom", 1, waitingroomMax, 5000),
+                new ScalingProperties.Waitingroom("nova-prod-waitingroom", 1, waitingroomMax, 5000, 3),
                 new ScalingProperties.Preorder("nova-prod-preorder", 1, 5, 3));
     }
 }

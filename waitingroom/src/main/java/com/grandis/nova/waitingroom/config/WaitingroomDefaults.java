@@ -32,8 +32,8 @@ class WaitingroomDefaults implements EnvironmentPostProcessor, Ordered {
             // 종료하면 readiness 를 먼저 내리고 받던 요청을 마저 처리한다
             Map.entry("server.shutdown", "graceful"),
             Map.entry("spring.lifecycle.timeout-per-shutdown-phase", "20s"),
-            // 명령 하나가 틱(1초)을, 연결이 리더 리스(2초)를 넘겨 붙들지 않게
-            Map.entry("spring.data.redis.timeout", "500ms"),
+            // 몰림 때 CPU 가 밀려 늦은 응답을 503 으로 끊지 않게 넉넉히 두되, 판정 재료 받기 주기의 시한(1.5초)은 넘기지 않게
+            Map.entry("spring.data.redis.timeout", "1500ms"),
             Map.entry("spring.data.redis.connect-timeout", "1s"),
             // 접수 전달. 응답이 늦으면 결과를 모르는 채로 끊기므로 접수 처리 시간보다 넉넉히 둔다
             Map.entry("spring.cloud.gateway.server.webflux.httpclient.connect-timeout", "1000"),

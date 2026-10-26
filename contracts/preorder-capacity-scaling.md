@@ -16,7 +16,7 @@ preorder 가 회차 일정 · 예상 방문자 수 · 관리자 입장 속도를
 
 | 서비스 | 걸린 회차가 없을 때 | 있을 때 |
 | --- | --- | --- |
-| waitingroom | `baseline` | `max(baseline, ⌈예상 방문자 ÷ visitors-per-task⌉)` 를 걸린 회차 중 가장 큰 값. 예상 방문자 수가 없는 회차는 늘리지 않는다 |
+| waitingroom | `baseline` | `max(baseline, surge, ⌈예상 방문자 ÷ visitors-per-task⌉)` 를 걸린 회차 중 가장 큰 값. `surge`(기본 3)는 예상 방문자 수가 없는 회차에도 올리는 대수다 |
 | preorder | `baseline` | `max(surge, ⌈global-credit ÷ accept-per-second⌉)`. `surge`(기본 3)는 같은 회차의 접수가 회차 행 잠금 하나에 줄 서서 그 이상 늘려도 한 회차의 접수가 빨라지지 않는 대수다 |
 
 - `global-credit` 은 대기열 관리자가 정한 전체 초당 입장 인원이다. 공유 Redis 의 `wr:settings` 해시에서 읽기만 한다(쓰기 · 지우기는 대기열). 대기열의 입장 속도가 살아 있는 preorder 용량의 합에 묶이므로, 관리자가 올리면 그만큼 받을 대수로 올린다. `accept-per-second` 는 `nova.capacity.heartbeat.accept-per-second`(기본 100)로, 대기열이 더하는 태스크당 용량과 같은 값이다.
