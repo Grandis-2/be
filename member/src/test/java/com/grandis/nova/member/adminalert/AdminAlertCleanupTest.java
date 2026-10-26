@@ -7,6 +7,8 @@ import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
@@ -33,6 +35,7 @@ class AdminAlertCleanupTest {
     static final Instant NOW = Instant.parse("2026-12-01T00:00:00Z");
 
     @Autowired JdbcTemplate jdbc;
+    @Autowired PlatformTransactionManager transactionManager;
 
     final AdminAlertWriterTest.MutableClock clock = new AdminAlertWriterTest.MutableClock(NOW);
     final TargetNames names = mock(TargetNames.class);
@@ -42,7 +45,8 @@ class AdminAlertCleanupTest {
     @BeforeEach
     void setUp() {
         jdbc.update("DELETE FROM admin_alerts");
-        cleanup = new AdminAlertCleanup(jdbc, names, clock, new AdminAlertCleanup.Settings(Duration.ofDays(30), 2, 10, Duration.ofDays(1), 20));
+        cleanup = new AdminAlertCleanup(jdbc, names, clock, new AdminAlertCleanup.Settings(Duration.ofDays(30), 2, 10, Duration.ofDays(1), 20),
+                new TransactionTemplate(transactionManager));
         when(names.find(any(), anyString())).thenReturn(TargetNames.Lookup.ABSENT);
         events = new AdminAlertEventReceiver(new AdminAlertIntake(new AdminAlertWriter(jdbc, JSON, clock), names,
                 new io.micrometer.core.instrument.simple.SimpleMeterRegistry()), JSON);
@@ -65,7 +69,8 @@ class AdminAlertCleanupTest {
     @Test
     @DisplayName("다시 묻는 대상은 대상 단위로 고른다 — 이름 없는 한 대상의 행이 한도(시험 2)보다 많아도 다른 대상의 자리를 차지하지 않는다")
     void refillPicksTargetsNotRows() {
-        cleanup = new AdminAlertCleanup(jdbc, names, clock, new AdminAlertCleanup.Settings(Duration.ofDays(30), 2, 10, Duration.ofDays(1), 2));
+        cleanup = new AdminAlertCleanup(jdbc, names, clock, new AdminAlertCleanup.Settings(Duration.ofDays(30), 2, 10, Duration.ofDays(1), 2),
+                new TransactionTemplate(transactionManager));
         UUID crowded = UUID.randomUUID();
         UUID other = UUID.randomUUID();
         events.receive(AdminAlertMessages.Event.draw("DRAW_DELAYED", other, "2026-11-30T00:00:00Z").body());

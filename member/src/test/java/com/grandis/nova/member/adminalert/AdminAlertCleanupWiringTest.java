@@ -8,6 +8,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.config.CronTask;
 import org.springframework.scheduling.config.ScheduledTask;
 import org.springframework.scheduling.config.ScheduledTaskHolder;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -26,7 +27,8 @@ class AdminAlertCleanupWiringTest {
     private final ApplicationContextRunner runner = new ApplicationContextRunner()
             .withUserConfiguration(RefreshTokenCleanupConfiguration.class)
             .withBean(AdminAlertCleanup.class, () -> new AdminAlertCleanup(mock(JdbcTemplate.class), mock(TargetNames.class), Clock.systemUTC(),
-                    new AdminAlertCleanup.Settings(Duration.ofDays(30), 500, 20, Duration.ofDays(1), 20)));
+                    new AdminAlertCleanup.Settings(Duration.ofDays(30), 500, 20, Duration.ofDays(1), 20),
+                    TransactionOperations.withoutTransaction()));
 
     @Test
     @DisplayName("기본은 10분마다 한 번")

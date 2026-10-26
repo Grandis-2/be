@@ -1,6 +1,9 @@
 package com.grandis.nova.member.adminalert;
 
 import com.grandis.nova.member.adminalert.AdminAlertWriter.Outcome;
+import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
+import org.mockito.ArgumentCaptor;
+import com.grandis.nova.common.UuidBinary;
 import com.grandis.nova.member.support.Concurrently;
 import com.grandis.nova.member.support.MemberIntegrationTest;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -38,6 +41,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.ArgumentMatchers.anyMap;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -229,6 +234,52 @@ class AdminAlertWriterTest {
         assertThat(olderOutcome.get()).isEqualTo(Outcome.IGNORED);
         assertThat(rows("REGISTER_FAILED")).extracting(r -> r.get("episode") + "/" + r.get("status"))
                 .containsExactly("2026-10-26T05:00:00Z/OPEN");
+    }
+
+    @Test
+    @DisplayName("잠금을 겹침(10초)보다 오래 기다린 변경도 꼬리에서 나간다 — changed_at 을 잠금을 다 잡은 뒤의 시각으로 다시 찍는다")
+    void changeAfterLongLockWaitStillReachesTheTail() throws Exception {
+        String startsAt = "2026-10-26T05:00:00Z";
+        grafana.receive(registerFailed(startsAt, "3"), T0);
+        UUID id = UuidBinary.fromBytes(jdbc.queryForObject("SELECT id FROM admin_alerts WHERE type = 'REGISTER_FAILED'", byte[].class));
+        AdminAlertStreams streams = mock(AdminAlertStreams.class);
+        when(streams.size()).thenReturn(1);
+        AdminAlertQueries queries = new AdminAlertQueries(new NamedParameterJdbcTemplate(jdbc));
+        AdminAlertTail tail = new AdminAlertTail(streams, queries, new AdminAlertService(queries, JSON, clock),
+                new AdminAlertStreamProperties(Duration.ofSeconds(25), Duration.ofMinutes(30), 20, 100, 1000, 100, Duration.ofSeconds(2),
+                        Duration.ofSeconds(10)), clock, new SimpleMeterRegistry());
+        tail.tick();   // 첫 주기 — 만든 행을 보낸다(version 0)
+        AdminAlertWriter writer = new AdminAlertWriter(jdbc, JSON, clock);
+        AdminAlertSignal update = grafana.parse(registerFailed(startsAt, "10"), T0.plusSeconds(1)).getFirst();
+
+        // 다른 트랜잭션이 그 행을 잡고 있는 동안 갱신이 시작되고(시각 T0), 15초 동안 잠금을 기다린다
+        CountDownLatch locked = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        Thread holder = Thread.ofPlatform().start(() -> transactions.executeWithoutResult(tx -> {
+            jdbc.queryForList("SELECT id FROM admin_alerts WHERE id = ? FOR UPDATE", (Object) UuidBinary.toBytes(id));
+            locked.countDown();
+            awaitLatch(release);
+        }));
+        awaitLatch(locked);
+        AtomicReference<Outcome> outcome = new AtomicReference<>();
+        Thread updater = Thread.ofPlatform().start(() -> outcome.set(transactions.execute(tx -> writer.apply(update, null))));
+        Thread.sleep(300);   // 갱신이 시각을 잡고 잠금 대기에 들어가는 동안
+        clock.advance(Duration.ofSeconds(15));
+        tail.tick();   // 창이 T0 + 5초로 옮겨진다 — 처음 잡은 시각(T0)으로 커밋되면 창 밖이다
+        release.countDown();
+        holder.join(10_000);
+        updater.join(10_000);
+        assertThat(outcome.get()).isEqualTo(Outcome.RAISED);
+
+        clock.advance(Duration.ofSeconds(2));
+        tail.tick();
+
+        assertThat(only("REGISTER_FAILED").get("changed_at")).isEqualTo(utc(T0.plusSeconds(15)));
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<AdminAlertResponse>> sent = ArgumentCaptor.forClass(List.class);
+        verify(streams, times(2)).publish(sent.capture(), anyMap());
+        assertThat(sent.getAllValues().getLast()).extracting(AdminAlertResponse::notificationId).containsExactly(id);
+        assertThat(sent.getAllValues().getLast().getFirst().metrics().get("deadLetters").asInt()).isEqualTo(10);
     }
 
     @Test

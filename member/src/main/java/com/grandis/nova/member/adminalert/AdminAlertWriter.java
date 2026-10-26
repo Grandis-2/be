@@ -8,6 +8,7 @@ import com.grandis.nova.member.adminalert.AdminAlertRules.Severity;
 import com.grandis.nova.member.adminalert.AdminAlertRules.Source;
 import com.grandis.nova.member.adminalert.AdminAlertRules.Status;
 import org.hibernate.id.uuid.UuidVersion7Strategy;
+import org.springframework.jdbc.core.JdbcOperations;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.annotation.Transactional;
@@ -48,6 +49,9 @@ import java.util.UUID;
  * SETTLED 의 해소(UPDATE)가 아직 없는 DELAYED 를 지나치고, DELAYED 의 확인도 미커밋 SETTLED 를 지나쳐 DELAYED 가 열린 채 남을 수 있다. 그래서 DELAYED 를
  * 넣은 뒤 SETTLED 를 잠금 읽기(FOR SHARE)로 다시 본다(같은 묶음의 Grafana 사건끼리도 같은 방식이다) — SETTLED 가 커밋 전이면 그 커밋을 기다렸다가 보고, 있으면 그 자리에서 해소한다. 둘 다 서로의 행을
  * 먼저 넣은 드문 순서에서는 교착(1213)으로 한쪽이 되돌려지고, 그 쪽은 일시 오류로 다시 받아 끝난다.
+ *
+ * changed_at(실시간 연결이 바뀐 행을 찾는 시각)은 커밋 직전에 다시 찍는다({@link #restamp}). 처음 잡은 시각을 그대로 두면 잠금 대기가 꼬리 읽기의
+ * 겹침(10초)보다 길 때 커밋된 행이 이미 창 밖이라 실시간으로 나가지 않는다. first_occurred_at · raised_at · resolved_at 같은 사건 시각은 그대로다.
  */
 @Component
 class AdminAlertWriter {
@@ -66,6 +70,7 @@ class AdminAlertWriter {
              WHERE type = ? AND target_kind = ? AND target_id = ? AND audience = ? AND first_occurred_at > ?""";
     private static final String LATER_EPISODE_LOCKED = LATER_EPISODE + " FOR SHARE";
     private static final String DELETE_OWN = "DELETE FROM admin_alerts WHERE id = ?";
+    private static final String RESTAMP = "UPDATE admin_alerts SET changed_at = ? WHERE changed_at = ?";
     private static final String SETTLED = """
             SELECT MIN(first_occurred_at) FROM admin_alerts WHERE type = 'DRAW_SETTLED' AND target_kind = 'DRAW' AND target_id = ?""";
     private static final String SETTLED_LOCKED = SETTLED + " FOR SHARE";
@@ -124,8 +129,25 @@ class AdminAlertWriter {
      */
     @Transactional
     Outcome apply(AdminAlertSignal signal, String targetName) {
-        Rule rule = AdminAlertRules.of(signal.type(), signal.source());
         Instant now = micros(clock.instant());
+        Outcome outcome = applyAt(signal, targetName, now);
+        restamp(jdbc, now, clock);
+        return outcome;
+    }
+
+    /**
+     * 이 트랜잭션이 written 으로 찍은 changed_at 을 지금 시각으로 다시 찍는다 — 잠금을 다 잡은 뒤라 이 문장은 기다리지 않는다. 같은 마이크로초에 다른
+     * 트랜잭션이 찍은 행이 함께 옮겨져도 version 은 그대로라 실시간 연결은 같은 변경을 두 번 보내지 않는다.
+     */
+    static void restamp(JdbcOperations jdbc, Instant written, Clock clock) {
+        Instant fresh = micros(clock.instant());
+        if (fresh.isAfter(written)) {
+            jdbc.update(RESTAMP, utc(fresh), utc(written));
+        }
+    }
+
+    private Outcome applyAt(AdminAlertSignal signal, String targetName, Instant now) {
+        Rule rule = AdminAlertRules.of(signal.type(), signal.source());
         if ("DRAW_DELAYED".equals(signal.type()) && settledAt(SETTLED, signal.targetId()) != null) {
             return Outcome.IGNORED;
         }

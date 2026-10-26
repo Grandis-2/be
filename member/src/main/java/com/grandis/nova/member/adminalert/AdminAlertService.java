@@ -5,6 +5,7 @@ import com.grandis.nova.common.CommonErrorCode;
 import com.grandis.nova.common.CursorPage;
 import com.grandis.nova.member.adminalert.AdminAlertRules.Audience;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Clock;
@@ -46,15 +47,25 @@ class AdminAlertService {
         return counts;
     }
 
-    /** 이미 읽었으면 그대로 둔다. 없는 id 는 404. 바꾼 행이 없을 때만 있는지 확인한다. */
+    /**
+     * 이미 읽었으면 그대로 둔다. 없는 id 는 404. 바꾼 행이 없을 때만 있는지 확인한다. 읽음 둘은 저장 중인 알림의 잠금을 기다릴 수 있어 트랜잭션으로 묶고
+     * 커밋 직전에 changed_at 을 다시 찍는다(AdminAlertWriter 와 같은 까닭).
+     */
+    @Transactional
     void markRead(UUID id) {
-        if (queries.markRead(id, now()) == 0 && !queries.exists(id)) {
+        Instant now = now();
+        if (queries.markRead(id, now) == 0 && !queries.exists(id)) {
             throw new BusinessException(CommonErrorCode.NOT_FOUND, "알림을 찾을 수 없습니다.");
         }
+        queries.restamp(now, clock);
     }
 
+    @Transactional
     void markAllRead(Audience audience) {
-        queries.markAllRead(audience, now());
+        Instant now = now();
+        if (queries.markAllRead(audience, now) > 0) {
+            queries.restamp(now, clock);
+        }
     }
 
     AdminAlertResponse response(AdminAlertQueries.View view) {

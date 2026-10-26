@@ -9,6 +9,7 @@ import org.springframework.boot.context.properties.bind.DefaultValue;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.support.TransactionOperations;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -64,12 +65,14 @@ class AdminAlertCleanup {
     private final TargetNames names;
     private final Clock clock;
     private final Settings settings;
+    private final TransactionOperations transactions;
 
-    AdminAlertCleanup(JdbcTemplate jdbc, TargetNames names, Clock clock, Settings settings) {
+    AdminAlertCleanup(JdbcTemplate jdbc, TargetNames names, Clock clock, Settings settings, TransactionOperations transactions) {
         this.jdbc = jdbc;
         this.names = names;
         this.clock = clock;
         this.settings = settings;
+        this.transactions = transactions;
     }
 
     @Scheduled(cron = "${member.admin-alert.cleanup.cron:0 */10 * * * *}")
@@ -118,7 +121,12 @@ class AdminAlertCleanup {
             if (lookup.name() == null) {
                 continue;
             }
-            jdbc.update(FILL, lookup.name(), AdminAlertWriter.utc(clock.instant()), kind.name(), target.get(1));
+            // 저장 중인 알림의 잠금을 기다릴 수 있어 묶고, 커밋 직전에 changed_at 을 다시 찍는다(AdminAlertWriter 와 같은 까닭)
+            transactions.executeWithoutResult(tx -> {
+                Instant written = AdminAlertWriter.micros(clock.instant());
+                jdbc.update(FILL, lookup.name(), AdminAlertWriter.utc(written), kind.name(), target.get(1));
+                AdminAlertWriter.restamp(jdbc, written, clock);
+            });
             filled++;
         }
         return filled;

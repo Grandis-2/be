@@ -9,6 +9,7 @@ import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Component;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.util.EnumMap;
 import java.util.List;
@@ -108,6 +109,11 @@ class AdminAlertQueries {
     int markRead(UUID id, Instant now) {
         return jdbc.update("UPDATE admin_alerts SET read_at = :now, changed_at = :now, version = version + 1 WHERE id = :id AND read_at IS NULL",
                 new MapSqlParameterSource("now", AdminAlertWriter.utc(now)).addValue("id", UuidBinary.toBytes(id)));
+    }
+
+    /** 이 트랜잭션이 written 으로 찍은 changed_at 을 지금으로 다시 찍는다(AdminAlertWriter.restamp). */
+    void restamp(Instant written, Clock clock) {
+        AdminAlertWriter.restamp(jdbc.getJdbcOperations(), written, clock);
     }
 
     boolean exists(UUID id) {
