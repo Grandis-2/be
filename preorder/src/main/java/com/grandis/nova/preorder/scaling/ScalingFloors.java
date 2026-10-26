@@ -24,10 +24,10 @@ record ScalingFloors(int preorder, int waitingroom, boolean capped) {
                 : (int) Math.min(Math.max(preorder.surge(),
                         Math.ceilDiv(admissionCredit.orElse(0), acceptPerSecond)), Integer.MAX_VALUE);
         // 예상 방문자 수가 없어도 surge 까지는 올린다 — 값을 빠뜨린 회차의 오픈 몰림을 평소 대수로 받지 않게
+        int waitingroomSurge = Math.max(waitingroom.baseline(), waitingroom.surge());
         int waitingroomFloor = demand.campaigns() == 0 ? waitingroom.baseline()
-                : demand.maxExpectedVisitors() == null ? waitingroom.surge()
-                : Math.max(waitingroom.surge(),
-                        Math.ceilDiv(demand.maxExpectedVisitors(), waitingroom.visitorsPerTask()));
+                : demand.maxExpectedVisitors() == null ? waitingroomSurge
+                : Math.max(waitingroomSurge, Math.ceilDiv(demand.maxExpectedVisitors(), waitingroom.visitorsPerTask()));
         boolean capped = preorderFloor > preorder.max() || waitingroomFloor > waitingroom.max();
         return new ScalingFloors(Math.min(preorderFloor, preorder.max()), Math.min(waitingroomFloor, waitingroom.max()),
                 capped);

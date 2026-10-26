@@ -33,6 +33,20 @@ class ScalingFloorsTest {
         assertThat(of(new ScalingDemand(1, 5_001))).isEqualTo(new ScalingFloors(3, 3, false));
     }
 
+    /** surge 를 넣지 않은 채 평소 대수만 올린 환경도 뜨고, 회차가 열려도 평소 아래로 내리지 않는다. */
+    @Test
+    void 대기열_평소_대수가_surge_보다_크면_평소_대수() {
+        ScalingProperties properties = new ScalingProperties(false, Duration.ofMinutes(1), "ap-northeast-2", "",
+                Duration.ofMinutes(15), Duration.ofMinutes(30), Duration.ofMinutes(1),
+                new ScalingProperties.Waitingroom("nova-prod-waitingroom", 4, 10, 5000, 3),
+                new ScalingProperties.Preorder("nova-prod-preorder", 1, 5, 3));
+
+        assertThat(ScalingFloors.of(new ScalingDemand(1, null), OptionalLong.empty(), ACCEPT_PER_SECOND, properties))
+                .isEqualTo(new ScalingFloors(3, 4, false));
+        assertThat(ScalingFloors.of(new ScalingDemand(1, 5_001), OptionalLong.empty(), ACCEPT_PER_SECOND, properties))
+                .isEqualTo(new ScalingFloors(3, 4, false));
+    }
+
     @Test
     void 최대_대수를_넘으면_최대로_자르고_알린다() {
         assertThat(of(new ScalingDemand(1, 1_000_000)))
@@ -77,7 +91,7 @@ class ScalingFloorsTest {
                 .isInstanceOf(IllegalArgumentException.class);
         assertThatThrownBy(() -> new ScalingProperties.Waitingroom("waitingroom", 3, 2, 5000, 3))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(() -> new ScalingProperties.Waitingroom("waitingroom", 2, 5, 5000, 1))
+        assertThatThrownBy(() -> new ScalingProperties.Waitingroom("waitingroom", 0, 5, 5000, 0))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
