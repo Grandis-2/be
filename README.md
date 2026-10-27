@@ -71,9 +71,18 @@ flowchart LR
     IC[batch-imagecleanup<br/>안 쓰는 사진 정리] -.오래된 UNUSED 사진 삭제.-> DB
 ```
 
-- 서비스는 모두 Spring Boot 이고 AWS ECS Fargate 위에서 따로 돈다. DB 는 NCP 의 MySQL 이다.
+- 서비스는 모두 Spring Boot 이고 AWS ECS Fargate 위에서 따로 돈다. DB 는 Amazon RDS 의 MySQL 이다.
 - 서비스끼리는 HTTP(묻기)나 SQS 이벤트(알리기)로만 이야기한다.
 - 외부 예약 시스템은 팀이 만든 Mock 이 대신한다. 별도 저장소([Grandis-2/mock](https://github.com/Grandis-2/mock))에 있고 우리와는 HTTP 로만 통신한다.
+
+### 운영 환경
+
+![AWS 운영 구성도](docs/images/aws-architecture.png)
+
+- 화면은 Vercel 이 내보내고, API 요청은 CloudFront + WAF → ALB 를 지나 경로별로 서비스에 닿는다. ALB 는 CloudFront 가 붙인 원본 확인 헤더가 있는 요청만 받는다.
+- 서비스끼리 부를 때는 ALB 를 거치지 않고 ECS Service Connect 별칭(`<서비스>.nova.local`)으로 간다. payment 는 ALB 경로가 없어 order 만 부른다.
+- 저장소는 RDS(MySQL) · ElastiCache(Valkey) · SQS(큐 10개, 큐마다 DLQ) · S3(상품 이미지, CDN 원본)다.
+- 인프라는 [Grandis-2/nova-infra](https://github.com/Grandis-2/nova-infra) 에서 Terraform 으로 관리하고, PR 에서 Atlantis 가 plan · apply 한다.
 
 ## 두 가지 흐름
 
@@ -241,20 +250,58 @@ worker 는 DB 를 쓰지 않는다. 외부에 보낼 내용과 몇 번째 시도
 worker(메시지가 오면 깨어나고 1~20대로 늘어남)와 batch 둘(정합성 검사는 상시 1대, 사진 정리는 매일 05:00 KST 단발 태스크)은 늘어나는 방식이 정반대라 나눴다.
 batch 둘(정합성 검사 · 사진 정리)도 따로 띄운다 — 한쪽 설정이 어긋나 뜨지 못해도 다른 쪽은 돈다.
 
+## 배포 흐름 (CI/CD)
+
+사람은 dev 까지만 머지한다. main 으로 옮기고 운영에 내보내는 일은 GitHub Actions 가 한다.
+
+```mermaid
+flowchart LR
+    PR[PR] --> CHK["build · database<br/>필수 검사"]
+    CHK --> DEV[dev 머지]
+    DEV --> GATE["promote<br/>같은 검사 + AOT 학습 검증"]
+    GATE --> MAIN[main 자동 반영]
+    MAIN --> MIG["운영 DB 마이그레이션<br/>(ECS 태스크)"]
+    MIG --> IMG["바뀐 서비스만<br/>이미지 + AOT 학습"]
+    IMG --> PUB["trivy 검사<br/>→ ECR"]
+    PUB --> ECS[ECS 재배포]
+```
+
+| 단계 | 워크플로 | 하는 일 |
+| --- | --- | --- |
+| PR 검사 | `build.yml` · `database.yml` | 바뀐 모듈만 골라 테스트, 마이그레이션 검사, 시크릿(gitleaks) · 의존성 취약점(trivy) 검사 |
+| 승격 | `promote.yml` | dev 커밋을 같은 검사와 AOT 학습으로 한 번 더 확인하고, 통과하면 main 을 그 커밋으로 옮긴다. main 으로 가는 PR 은 없다. 저장소 변수 `AUTO_RELEASE=false` 면 검사만 하고 멈춘다(부하 시험 · 시연 중) |
+| 릴리스 | `release.yml` | 운영 DB 마이그레이션을 먼저 적용하고, 내용이 바뀐 서비스만 이미지로 만들어 ECR 에 올린 뒤 ECS 에 다시 배포한다. 마이그레이션이 실패하면 어떤 서비스도 배포하지 않는다 |
+
+**JVM AOT 캐시.** 오픈 순간 새로 뜬 태스크가 바로 요청을 받도록, 이미지마다 JDK 25 AOT 캐시(`app.aot`)를 넣는다.
+CI 가 일회용 MySQL · Redis · SQS 에뮬레이터 · 결제 스텁을 띄우고 k6 로 상품 등록부터 주문 · 결제까지 실제 요청을 보내 학습시킨다.
+학습한 바로 그 이미지에 캐시를 얹고, `-XX:AOTMode=on` 으로 띄워 캐시를 받지 못하면 릴리스를 실패시킨다.
+CI 에서 잰 서비스 기동 시간(92회 중앙값, 1 CPU)은 39~49% 줄었다. 학습 스크립트는 `docker/aot-training/` 에 있다.
+
+## 관측
+
+- 서비스 이미지에는 OpenTelemetry Java 에이전트와 Pyroscope 프로파일 확장이 실려 있다. 켜는 쪽은 nova-infra 의 작업 정의다.
+- 로그 · 트레이스 · 지표 · 프로파일은 관측 클러스터의 OTel 게이트웨이로 모이고, Grafana 스택(Loki · Tempo · Mimir · Pyroscope)에 저장된다. 프런트의 실사용자 지표(RUM)도 같은 곳으로 온다.
+- Grafana 는 CloudFront 뒤에 있고 Cognito 로 로그인한다.
+- 경보
+  - Grafana 가 SLO · 애플리케이션 지표 경보를 Slack 으로 보낸다.
+  - CloudWatch(ALB · ECS · SQS · 엣지 지표)와 EventBridge(ECS 배포 · 기동 실패) 경보는 SNS → Chatbot 을 거쳐 Slack 으로 간다.
+  - 관리자 화면에 띄울 경보는 SNS → SQS 를 거쳐 member 가 `admin_alerts` 에 저장한다.
+- 관측 연결 설정은 [Grandis-2/nova-observability](https://github.com/Grandis-2/nova-observability) 에 있다.
+
 ## 기술 스택
 
 | 영역 | 사용 |
 | --- | --- |
 | 언어 · 프레임워크 | Java 25 · Spring Boot 4.1 · Spring Data JPA · Spring Cloud Gateway(WebFlux) |
-| 저장소 | MySQL 8.4 (`READ COMMITTED`, NCP) · Redis |
+| 저장소 | MySQL 8.4 (`READ COMMITTED`, Amazon RDS) · Valkey (ElastiCache, 로컬은 Redis) |
 | 메시징 | AWS SQS (Transactional Outbox) |
 | 인증 | 카카오 OAuth · JWT RS256 (JWKS 로 공개키 배포) · 리프레시 토큰 회전 |
 | 결제 | 토스페이먼츠 |
 | 회복 · 캐시 | Resilience4j · Caffeine |
 | DB 변경 | Flyway (Docker CLI) |
 | 테스트 | JUnit 5 · Testcontainers · ArchUnit · k6 |
-| 관측 | Micrometer · Prometheus · OpenTelemetry Java 에이전트 |
-| 배포 | GitHub Actions · Amazon ECR · ECS Fargate · JVM AOT 캐시 |
+| 관측 | Micrometer · Prometheus · OpenTelemetry Java 에이전트 · Grafana (Loki · Tempo · Mimir · Pyroscope) |
+| 배포 | GitHub Actions · Amazon ECR · ECS Fargate · JVM AOT 캐시 · Terraform · Atlantis |
 
 ## 모듈 구성
 
@@ -323,6 +370,16 @@ cp member/src/main/resources/application.yml.example member/src/main/resources/a
 | waitingroom · payment | 8085 (둘을 함께 띄울 때는 하나를 바꾼다) |
 
 API 문서는 Swagger 허브(`docker/openapi-hub`)로 member · catalog · preorder · order 를 한곳에 모아 볼 수 있다.
+
+## 관련 저장소
+
+| 저장소 | 하는 일 |
+| --- | --- |
+| [Grandis-2/fe](https://github.com/Grandis-2/fe) | 프런트엔드 — React · TypeScript, Vercel 로 내보낸다 |
+| [Grandis-2/mock](https://github.com/Grandis-2/mock) | 외부 예약 · 추첨 시스템 Mock — 지연 · 실패율을 조절할 수 있다 |
+| [Grandis-2/nova-infra](https://github.com/Grandis-2/nova-infra) | AWS 인프라 — Terraform · Atlantis |
+| [Grandis-2/nova-loadtest](https://github.com/Grandis-2/nova-loadtest) | 부하 시험 — k6 를 ECS Fargate 에 여러 대 띄워 운영과 같은 경로로 보낸다 |
+| [Grandis-2/nova-observability](https://github.com/Grandis-2/nova-observability) | 관측 플랫폼 연결 설정 |
 
 ## 더 읽을거리
 
